@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -47,6 +48,7 @@ const PREDEFINED_FIELDS: PredefinedField[] = [
 ];
 
 const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Contábil', 'Data', 'Texto'];
+const NONE_VALUE_PLACEHOLDER = "__NONE__"; // Placeholder for empty select values
 
 export default function Home() {
   const { toast } = useToast();
@@ -184,12 +186,24 @@ export default function Home() {
     setColumnMappings(prev => {
       const newMappings = [...prev];
       const currentMapping = { ...newMappings[index] };
-      (currentMapping[field] as any) = value;
+      let actualValue = value === NONE_VALUE_PLACEHOLDER ? null : value;
 
-      // Reset length if not Alphanumeric or Texto
-      if (field === 'dataType' && value !== 'Alfanumérico' && value !== 'Texto') {
-        currentMapping.length = null;
-      }
+      // Special handling for length based on dataType
+      if (field === 'dataType') {
+         (currentMapping[field] as any) = actualValue;
+         // Reset length if dataType changes and is not Alphanumeric or Texto
+         if (actualValue !== 'Alfanumérico' && actualValue !== 'Texto') {
+           currentMapping.length = null;
+         }
+       } else if (field === 'length') {
+            // Ensure length is stored as a number or null
+           const numValue = parseInt(value, 10);
+           currentMapping.length = isNaN(numValue) || numValue <= 0 ? null : numValue;
+       } else {
+         // Handle mappedField and other fields
+          (currentMapping[field] as any) = actualValue;
+       }
+
 
       newMappings[index] = currentMapping;
       return newMappings;
@@ -269,18 +283,19 @@ export default function Home() {
       setOutputConfig(prev => {
           const newFields = [...prev.fields];
           const currentField = { ...newFields[index] };
-          (currentField[field] as any) = value;
+          let actualValue = value === NONE_VALUE_PLACEHOLDER ? null : value;
 
-          // Ensure length is a number or undefined
-          if (field === 'length') {
-            const numValue = parseInt(value, 10);
-            currentField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
-          }
-          // Ensure order is a number
-          if (field === 'order') {
-            const numValue = parseInt(value, 10);
-            currentField.order = isNaN(numValue) ? 0 : numValue; // Default to 0 if invalid
-          }
+           if (field === 'mappedField') {
+                (currentField[field] as any) = actualValue;
+           } else if (field === 'length') {
+              const numValue = parseInt(value, 10);
+              currentField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
+            } else if (field === 'order') {
+              const numValue = parseInt(value, 10);
+              currentField.order = isNaN(numValue) ? 0 : numValue; // Default to 0 if invalid
+            } else {
+              (currentField[field] as any) = actualValue;
+            }
 
 
           newFields[index] = currentField;
@@ -506,7 +521,7 @@ export default function Home() {
 
        return (
            <Select
-               value={currentFieldMappedId || ""}
+               value={currentFieldMappedId || NONE_VALUE_PLACEHOLDER} // Use placeholder if null
                onValueChange={(value) => handleOutputFieldChange(currentIndex, 'mappedField', value)}
                disabled={isProcessing}
            >
@@ -514,6 +529,8 @@ export default function Home() {
                    <SelectValue placeholder="Selecione o Campo" />
                </SelectTrigger>
                <SelectContent>
+                   {/* Add a placeholder item if needed, but ensure it has a unique value */}
+                   {/* <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem> */}
                    {availableOptions.length > 0 ? (
                        availableOptions.map(field => (
                            <SelectItem key={field.id} value={field.id}>
@@ -521,7 +538,7 @@ export default function Home() {
                            </SelectItem>
                        ))
                    ) : (
-                       <SelectItem value="" disabled>Nenhum campo mapeado disponível</SelectItem>
+                       <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>Nenhum campo mapeado disponível</SelectItem>
                    )}
                </SelectContent>
            </Select>
@@ -638,15 +655,15 @@ export default function Home() {
                                    <TableCell className="font-medium">{mapping.originalHeader}</TableCell>
                                    <TableCell>
                                      <Select
-                                       value={mapping.mappedField || ""}
-                                       onValueChange={(value) => handleMappingChange(index, 'mappedField', value || null)}
+                                       value={mapping.mappedField || NONE_VALUE_PLACEHOLDER} // Use placeholder value
+                                       onValueChange={(value) => handleMappingChange(index, 'mappedField', value)}
                                         disabled={isProcessing}
                                      >
                                        <SelectTrigger>
                                          <SelectValue placeholder="Selecione ou deixe em branco" />
                                        </SelectTrigger>
                                        <SelectContent>
-                                         <SelectItem value="">-- Não Mapear --</SelectItem>
+                                         <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Não Mapear --</SelectItem>
                                          {predefinedFields.map(field => (
                                            <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
                                          ))}
@@ -655,15 +672,15 @@ export default function Home() {
                                    </TableCell>
                                    <TableCell>
                                      <Select
-                                       value={mapping.dataType || ""}
-                                       onValueChange={(value) => handleMappingChange(index, 'dataType', value || null)}
+                                       value={mapping.dataType || NONE_VALUE_PLACEHOLDER} // Use placeholder value
+                                       onValueChange={(value) => handleMappingChange(index, 'dataType', value)}
                                        disabled={isProcessing || !mapping.mappedField} // Disable if not mapped
                                      >
                                        <SelectTrigger>
                                          <SelectValue placeholder="Tipo" />
                                        </SelectTrigger>
                                        <SelectContent>
-                                         <SelectItem value="">-- Selecione --</SelectItem>
+                                         <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Selecione --</SelectItem>
                                          {DATA_TYPES.map(type => (
                                            <SelectItem key={type} value={type}>{type}</SelectItem>
                                          ))}
@@ -674,8 +691,8 @@ export default function Home() {
                                      <Input
                                        type="number"
                                        min="1"
-                                       value={mapping.length ?? ''}
-                                       onChange={(e) => handleMappingChange(index, 'length', e.target.value ? parseInt(e.target.value, 10) : null)}
+                                       value={mapping.length ?? ''} // Use empty string for controlled input if null/undefined
+                                       onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
                                        placeholder="Tamanho"
                                        className="w-full"
                                        disabled={isProcessing || !mapping.dataType || !['Alfanumérico', 'Texto'].includes(mapping.dataType)} // Only enable for specific types
