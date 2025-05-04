@@ -1,5 +1,3 @@
-
-
 "use client";
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -127,7 +125,7 @@ const formatNumber = (value: string | number, decimals: number): string => {
 }
 
 // Helper to remove mask based on type
-const removeMask = (value: string, dataType: DataType | null): string => {
+const removeMaskHelper = (value: string, dataType: DataType | null): string => {
     if (!dataType || value === null || value === undefined) return '';
     const stringValue = String(value);
 
@@ -179,6 +177,35 @@ export default function Home() {
 
   const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'; // Get version
 
+   // Function to get sample data for preview
+   const getSampleData = (): any[] => {
+       return fileData.slice(0, 5); // Return first 5 rows
+   };
+
+
+   const resetState = useCallback(() => {
+    setFile(null);
+    setFileName('');
+    setHeaders([]);
+    setFileData([]);
+    setColumnMappings([]);
+    setOutputConfig({ format: 'txt', fields: [] });
+    // Don't reset predefined fields to keep custom additions? Or reset?
+    // setPredefinedFields(PREDEFINED_FIELDS); // Uncomment to reset custom fields
+    setNewFieldName('');
+    setConvertedData('');
+    setOutputEncoding('UTF-8'); // Reset encoding
+    setIsProcessing(false);
+    setProcessingMessage('Processando...');
+    setActiveTab("upload");
+    setShowPreview(false);
+     setStaticFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', staticValue: '', length: '', paddingChar: ' ', paddingDirection: 'right' });
+    const fileInput = document.getElementById('file-upload') as HTMLInputElement;
+    if (fileInput) fileInput.value = '';
+     toast({ title: "Pronto", description: "Formulário resetado para nova conversão." });
+  }, [toast]); // Make resetState a useCallback
+
+
   // --- File Handling ---
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
@@ -207,126 +234,152 @@ export default function Home() {
   const processFile = useCallback(async (fileToProcess: File) => {
     setIsProcessing(true);
     setProcessingMessage('Lendo arquivo...');
+    let extractedHeaders: string[] = [];
+    let extractedData: any[] = [];
+
     try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const data = e.target?.result;
-        if (!data) {
-          throw new Error("Falha ao ler o arquivo.");
-        }
-
-        let extractedHeaders: string[] = [];
-        let extractedData: any[] = [];
-
-        if (fileToProcess.type.includes('spreadsheet') || fileToProcess.type.includes('excel') || fileToProcess.name.endsWith('.ods')) {
-          setProcessingMessage('Processando planilha...');
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          // Read with raw: false initially to preserve original formatting for numeric types
-          const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' }); // Use raw: false to get formatted strings
-
-          if (jsonData.length > 0) {
-             extractedHeaders = jsonData[0].map(String); // First row as headers
-             extractedData = jsonData.slice(1).map(row => { // Remaining rows as data
-               const rowData: { [key: string]: any } = {};
-               extractedHeaders.forEach((header, index) => {
-                 rowData[header] = row[index] ?? ''; // Use formatted value or empty string
-               });
-               return rowData;
-             });
-          }
-        } else if (fileToProcess.type === 'application/pdf') {
-          setProcessingMessage('Extraindo dados do PDF via IA (pode levar um momento)...');
-          toast({
-            title: "Aviso",
-            description: "A extração de PDF usa IA e pode levar mais tempo. A precisão depende do layout do PDF.",
-            variant: "default",
-          });
-
-           // Read PDF as Data URI for the AI flow
-           const pdfDataUri = await new Promise<string>((resolve, reject) => {
-                const pdfReader = new FileReader();
-                pdfReader.onload = (event) => resolve(event.target?.result as string);
-                pdfReader.onerror = (error) => reject(error);
-                pdfReader.readAsDataURL(fileToProcess);
-            });
-
-          // Call the Genkit flow
-           const result: ExtractPdfTableOutput = await extractPdfTable({ pdfDataUri });
-
-           if (result.error || !result.headers || result.rows.length === 0) {
-               toast({
-                 title: "Erro na Extração do PDF",
-                 description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
-                 variant: "destructive",
-               });
-               // Don't throw an error, allow user to potentially manually map if headers came through
-               if (!result.headers || result.headers.length === 0) {
-                    resetState(); // Reset fully if no headers at all
-                    return;
-               } else {
-                  // Proceed with headers but no data, warn user
-                   extractedHeaders = result.headers;
-                   extractedData = [];
-                   toast({
-                       title: "Aviso",
-                       description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
-                       variant: "default",
-                   });
-               }
-           } else {
-                extractedHeaders = result.headers;
-                // Convert rows to the expected object format { Header: Value }
-                 extractedData = result.rows.map(row => {
-                    const rowData: { [key: string]: any } = {};
-                    if (Array.isArray(row)) {
-                         extractedHeaders.forEach((header, index) => {
-                             rowData[header] = row[index] ?? '';
-                         });
-                    } else { // It's already an object
-                        extractedHeaders.forEach(header => {
-                           rowData[header] = row[header] ?? '';
-                        });
-                    }
-                    return rowData;
-                });
-           }
-
-        }
-
-        if (extractedHeaders.length === 0 && fileToProcess.type !== 'application/pdf') { // Don't throw for PDF if headers are missing but handled above
-          throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
-        }
-
-        setHeaders(extractedHeaders);
-        setFileData(extractedData);
-        setColumnMappings(extractedHeaders.map(header => {
-            const guessedField = guessPredefinedField(header);
-            const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
-            return {
-                originalHeader: header,
-                mappedField: guessedField,
-                dataType: guessedType,
-                length: null,
-                // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
-                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
-            }
-        }));
-        toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
-      };
-      reader.onerror = () => {
-        throw new Error("Falha ao ler o arquivo.");
-      };
-
-      // Use readAsArrayBuffer for Excel/ODS, PDF is handled in its block
       if (fileToProcess.type.includes('spreadsheet') || fileToProcess.type.includes('excel') || fileToProcess.name.endsWith('.ods')) {
-          reader.readAsArrayBuffer(fileToProcess);
+        setProcessingMessage('Processando planilha...');
+        const data = await fileToProcess.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' });
+
+        if (jsonData.length > 0) {
+           extractedHeaders = jsonData[0].map(String);
+           extractedData = jsonData.slice(1).map(row => {
+             const rowData: { [key: string]: any } = {};
+             extractedHeaders.forEach((header, index) => {
+               rowData[header] = row[index] ?? '';
+             });
+             return rowData;
+           });
+        }
       } else if (fileToProcess.type === 'application/pdf') {
-          // PDF reading is handled within the onload callback using readAsDataURL
-          reader.onload!(null as any); // Trigger onload manually after setting it up
+        setProcessingMessage('Extraindo dados do PDF via IA (pode levar um momento)...');
+        toast({
+          title: "Aviso",
+          description: "A extração de PDF usa IA e pode levar mais tempo. A precisão depende do layout do PDF.",
+          variant: "default",
+        });
+
+         const pdfReader = new FileReader();
+         pdfReader.onload = async (e) => {
+            const pdfDataUri = e.target?.result as string;
+            if (!pdfDataUri) {
+                throw new Error("Falha ao ler o arquivo PDF.");
+            }
+
+            try {
+                 const result: ExtractPdfTableOutput = await extractPdfTable({ pdfDataUri });
+
+                 if (result.error || !result.headers || result.rows.length === 0) {
+                     toast({
+                       title: "Erro na Extração do PDF",
+                       description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
+                       variant: "destructive",
+                     });
+                     if (!result.headers || result.headers.length === 0) {
+                          resetState(); // Full reset if no headers at all
+                          return;
+                     } else {
+                         extractedHeaders = result.headers;
+                         extractedData = [];
+                         toast({
+                             title: "Aviso",
+                             description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
+                             variant: "default",
+                         });
+                     }
+                 } else {
+                      extractedHeaders = result.headers;
+                      extractedData = result.rows.map(row => {
+                          const rowData: { [key: string]: any } = {};
+                          if (Array.isArray(row)) {
+                               extractedHeaders.forEach((header, index) => {
+                                   rowData[header] = row[index] ?? '';
+                               });
+                          } else {
+                              extractedHeaders.forEach(header => {
+                                 rowData[header] = row[header] ?? '';
+                              });
+                          }
+                          return rowData;
+                      });
+                 }
+
+                 // Continue processing after PDF handling (inside onload)
+                  if (extractedHeaders.length === 0) {
+                     throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
+                 }
+
+                 setHeaders(extractedHeaders);
+                 setFileData(extractedData);
+                  setColumnMappings(extractedHeaders.map(header => {
+                      const guessedField = guessPredefinedField(header);
+                      const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
+                      return {
+                          originalHeader: header,
+                          mappedField: guessedField,
+                          dataType: guessedType,
+                          length: null,
+                          removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
+                      }
+                 }));
+                  toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
+
+            } catch (pdfError: any) {
+                 console.error("Erro ao processar PDF via IA:", pdfError);
+                 toast({
+                     title: "Erro ao Processar PDF",
+                     description: pdfError.message || "Ocorreu um erro inesperado durante a extração do PDF.",
+                     variant: "destructive",
+                 });
+                 resetState();
+            } finally {
+                setIsProcessing(false);
+                setProcessingMessage('Processando...');
+            }
+         };
+          pdfReader.onerror = (error) => {
+             console.error("Erro ao ler arquivo PDF:", error);
+             toast({
+                 title: "Erro ao Ler Arquivo",
+                 description: "Não foi possível ler o arquivo PDF.",
+                 variant: "destructive",
+             });
+             resetState();
+             setIsProcessing(false);
+          };
+         pdfReader.readAsDataURL(fileToProcess);
+
+         // Early return for PDF as processing continues in onload
+         return;
+
+      } else {
+           throw new Error("Tipo de arquivo não suportado para processamento.");
       }
 
+      if (extractedHeaders.length === 0) {
+        throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
+      }
+
+      setHeaders(extractedHeaders);
+      setFileData(extractedData);
+      setColumnMappings(extractedHeaders.map(header => {
+          const guessedField = guessPredefinedField(header);
+          const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
+          return {
+              originalHeader: header,
+              mappedField: guessedField,
+              dataType: guessedType,
+              length: null,
+              // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
+              removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
+          }
+      }));
+      toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
 
     } catch (error: any) {
       console.error("Erro ao processar arquivo:", error);
@@ -337,10 +390,14 @@ export default function Home() {
       });
       resetState();
     } finally {
-      setIsProcessing(false);
-      setProcessingMessage('Processando...'); // Reset message
+      // Only set processing to false here for non-PDF files
+       if (!fileToProcess.type.includes('pdf')) {
+         setIsProcessing(false);
+         setProcessingMessage('Processando...'); // Reset message
+       }
     }
-  }, [toast]);
+  }, [toast, resetState]); // Added resetState to dependencies
+
 
   // --- Mapping ---
   const handleMappingChange = (index: number, field: keyof ColumnMapping, value: any) => {
@@ -529,6 +586,11 @@ export default function Home() {
                             updatedField.length = updatedField.length ?? (correspondingMapping?.length ?? 10); // Keep existing length if set
                             updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
                             updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
+                        } else {
+                             // For CSV, clear TXT-specific props if they exist
+                             delete updatedField.length;
+                             delete updatedField.paddingChar;
+                             delete updatedField.paddingDirection;
                         }
                         if (dataType === 'Data') {
                             updatedField.dateFormat = updatedField.dateFormat ?? 'YYYYMMDD'; // Default date format
@@ -538,7 +600,13 @@ export default function Home() {
                     }
                 } else if (field === 'length') {
                     const numValue = parseInt(value, 10);
+                     // Store length even if format isn't TXT, it will be used if format changes back
                     updatedField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
+                     // Update padding char/direction if length changes and format is TXT
+                     if (prev.format === 'txt') {
+                          updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                          updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
+                     }
                 } else if (field === 'order') {
                     const numValue = parseInt(value, 10);
                     updatedField.order = isNaN(numValue) ? (prev.fields.length > 0 ? Math.max(...prev.fields.map(f => f.order)) + 1 : 0) : numValue;
@@ -590,9 +658,12 @@ export default function Home() {
         isStatic: false,
         mappedField: newFieldId,
         order: maxOrder + 1,
-        length: outputConfig.format === 'txt' ? (defaultLength ?? 10) : undefined, // Default 10 if TXT and no length from mapping
-        paddingChar: outputConfig.format === 'txt' ? getDefaultPaddingChar({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings) : undefined,
-        paddingDirection: outputConfig.format === 'txt' ? getDefaultPaddingDirection({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings) : undefined,
+         // Conditionally add TXT props based on current format
+        ...(outputConfig.format === 'txt' && {
+             length: defaultLength ?? 10,
+             paddingChar: getDefaultPaddingChar({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
+             paddingDirection: getDefaultPaddingDirection({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
+         }),
         dateFormat: dataType === 'Data' ? 'YYYYMMDD' : undefined, // Default date format if applicable
     };
 
@@ -673,9 +744,12 @@ export default function Home() {
              fieldName: fieldName.trim(),
              staticValue: staticValue,
              order: 0, // Will be re-ordered later
-             length: outputConfig.format === 'txt' ? len : undefined,
-             paddingChar: outputConfig.format === 'txt' ? paddingChar : undefined,
-             paddingDirection: outputConfig.format === 'txt' ? paddingDirection : undefined,
+              // Conditionally add TXT props based on current format
+             ...(outputConfig.format === 'txt' && {
+                length: len,
+                paddingChar: paddingChar,
+                paddingDirection: paddingDirection,
+            }),
               // Cannot have dateFormat for static fields
          };
 
@@ -687,7 +761,21 @@ export default function Home() {
                  const existingFieldIndex = prev.fields.findIndex(f => f.id === fieldId);
                  if (existingFieldIndex === -1) return prev; // Should not happen
                  newFields = [...prev.fields];
-                 newFields[existingFieldIndex] = { ...staticField, order: prev.fields[existingFieldIndex].order }; // Preserve order
+                 // Ensure TXT props are updated based on the DIALOG state, not just the current format
+                  const updatedStaticField = { ...staticField, order: prev.fields[existingFieldIndex].order }; // Preserve order
+                  if (prev.format === 'txt') {
+                     updatedStaticField.length = len;
+                     updatedStaticField.paddingChar = paddingChar;
+                     updatedStaticField.paddingDirection = paddingDirection;
+                  } else {
+                      // Keep the values from the dialog even if format is CSV, they'll be used if switching back
+                      updatedStaticField.length = len; // Store it
+                      updatedStaticField.paddingChar = paddingChar; // Store it
+                      updatedStaticField.paddingDirection = paddingDirection; // Store it
+                      // ... but they won't be applied during CSV generation
+                  }
+
+                 newFields[existingFieldIndex] = updatedStaticField;
 
             } else {
                  // Add new field to the end for now
@@ -720,30 +808,31 @@ export default function Home() {
                    const fieldId = `mapped-${m.mappedField!}-${index}`; // Consistent ID generation
                    const existingField = existingFieldsMap.get(m.mappedField!) as OutputFieldConfig | undefined;
 
-                    let baseField: Omit<OutputFieldConfig, 'id' | 'order'> & { mappedField: string } = {
+                    let baseField: Omit<OutputFieldConfig, 'id' | 'order' | 'isStatic' | 'mappedField'> & { mappedField: string, isStatic: false } = {
                        isStatic: false,
                        mappedField: m.mappedField!,
-                       length: existingField?.length ?? ((dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? undefined) : undefined), // Prioritize existing, then mapping, then undefined
-                       paddingChar: existingField?.paddingChar ?? undefined, // Start undefined, set below based on format
-                       paddingDirection: existingField?.paddingDirection ?? undefined, // Start undefined, set below based on format
+                        // Preserve existing values if they exist, otherwise set based on mapping/defaults
+                       length: existingField?.length ?? ((dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? undefined) : undefined),
+                       paddingChar: existingField?.paddingChar ?? undefined,
+                       paddingDirection: existingField?.paddingDirection ?? undefined,
                        dateFormat: existingField?.dateFormat ?? (dataType === 'Data' ? 'YYYYMMDD' : undefined),
                     };
 
-                   // Apply format-specific overrides
+                   // Apply format-specific overrides ONLY if not already set from existingField
                    if (prevConfig.format === 'txt') {
-                       baseField.length = baseField.length ?? 10; // Ensure length for TXT (default 10 if still undefined)
-                       baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
-                       baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
+                        baseField.length = baseField.length ?? 10; // Ensure length for TXT
+                        baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
+                        baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
                    } else {
-                       // Remove TXT-specific props if not TXT format
-                        baseField.length = undefined;
-                        baseField.paddingChar = undefined;
-                        baseField.paddingDirection = undefined;
+                       // Remove TXT-specific props if format is CSV *and* they weren't preserved from an existing field
+                       if (existingField?.length === undefined) delete baseField.length;
+                       if (existingField?.paddingChar === undefined) delete baseField.paddingChar;
+                       if (existingField?.paddingDirection === undefined) delete baseField.paddingDirection;
                    }
-                     // Ensure dateFormat is only present for Data type
-                    if (dataType !== 'Data') {
-                       baseField.dateFormat = undefined;
-                    } else {
+                     // Ensure dateFormat is only present for Data type, unless preserved
+                    if (dataType !== 'Data' && existingField?.dateFormat === undefined) {
+                       delete baseField.dateFormat;
+                    } else if (dataType === 'Data') {
                         baseField.dateFormat = baseField.dateFormat ?? 'YYYYMMDD'; // Ensure default if Data type
                     }
 
@@ -766,11 +855,11 @@ export default function Home() {
                     acc[existingIndex] = current;
                }
                return acc;
-           }, [] as OutputFieldConfig[]);
+           }, [] as (OutputFieldConfig & {isStatic: false})[]); // Assert type here
 
            // Get existing static fields, update TXT props based on current format
             const updatedStaticFields = prevConfig.fields
-                .filter(f => f.isStatic)
+                .filter((f): f is OutputFieldConfig & { isStatic: true } => f.isStatic) // Type guard
                 .map(f => {
                     if (prevConfig.format === 'txt') {
                         return {
@@ -780,18 +869,17 @@ export default function Home() {
                             paddingDirection: f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings),
                         };
                     } else {
-                        return {
+                        // Keep stored values but don't apply them if format is CSV
+                         return {
                              ...f,
-                             length: undefined,
-                             paddingChar: undefined,
-                             paddingDirection: undefined,
+                             // length, paddingChar, paddingDirection are kept but not used by CSV logic
                          };
                     }
                 });
 
 
            // Combine existing static fields with new/updated unique mapped fields
-            let combinedFields = [
+            let combinedFields: OutputFieldConfig[] = [ // Ensure combinedFields has the correct type
                ...updatedStaticFields,
                ...uniqueMappedFields
            ];
@@ -896,7 +984,7 @@ export default function Home() {
 
                  // Apply mask removal if configured
                   if (mapping.removeMask && dataType && value) { // Check if value is truthy before removing mask
-                      value = removeMask(value, dataType);
+                      value = removeMaskHelper(value, dataType);
                   }
 
 
@@ -1038,10 +1126,13 @@ export default function Home() {
 
                                 // Fallback: Try standard Date constructor on original value as last resort
                                 if (!parsedDate || isNaN(parsedDate.getTime())) {
-                                    let attemptOriginalParse = new Date(originalValue);
-                                    // Check if the fallback parse is valid and not the epoch date (often indicates failure)
-                                    if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getUTCFullYear() > 1900) {
-                                        parsedDate = attemptOriginalParse;
+                                     // Only attempt if originalValue looks somewhat like a date
+                                    if (originalValue && /[0-9]/.test(originalValue)) {
+                                        let attemptOriginalParse = new Date(originalValue);
+                                        // Check if the fallback parse is valid and not the epoch date (often indicates failure)
+                                         if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getUTCFullYear() > 1900) {
+                                            parsedDate = attemptOriginalParse;
+                                        }
                                     }
                                 }
 
@@ -1088,18 +1179,54 @@ export default function Home() {
                  if (processedValue.length > len) {
                       console.warn(`Truncating value "${processedValue}" for field ${outputField.isStatic ? outputField.fieldName : outputField.mappedField} as it exceeds length ${len}`);
                       // Truncate based on padding direction (or a sensible default)
-                      // Usually, text truncates from right, numbers from left? Needs clarification.
                       // Defaulting to truncating from the right for simplicity.
-                      processedValue = processedValue.substring(0, len);
+                       // Keep sign if numeric and padding left
+                      if (padDir === 'left' && (dataType === 'Numérico' || dataType === 'Contábil' || dataType === 'Inteiro' || (outputField.isStatic && /^-?\d/.test(processedValue)))) {
+                          const isNegative = processedValue.startsWith('-');
+                          const absValue = isNegative ? processedValue.substring(1) : processedValue;
+                           const targetLength = isNegative ? len - 1 : len; // Leave space for sign if needed
+
+                           if (targetLength <= 0) {
+                               processedValue = isNegative ? '-' : ''; // Only keep sign if len=1 and negative, else empty
+                               if (processedValue.length > len) processedValue = processedValue.substring(0, len); // Ensure length constraint
+                           } else {
+                               const truncatedAbs = absValue.substring(absValue.length - targetLength);
+                               processedValue = isNegative ? '-' + truncatedAbs : truncatedAbs;
+                           }
+
+                      } else {
+                         processedValue = processedValue.substring(0, len);
+                      }
+
                  } else if (processedValue.length < len) {
                      const padLen = len - processedValue.length;
                      if (padDir === 'left') {
-                         processedValue = padChar.repeat(padLen) + processedValue;
+                         // Special handling for negative numbers when padding left with '0'
+                         if (processedValue.startsWith('-') && padChar === '0') {
+                             processedValue = '-' + padChar.repeat(padLen) + processedValue.substring(1);
+                         } else {
+                             processedValue = padChar.repeat(padLen) + processedValue;
+                         }
                      } else { // right
                          processedValue = processedValue + padChar.repeat(padLen);
                      }
                  }
-                 // The standard padding should handle negative signs correctly as they are part of the string.
+                 // Ensure final length is correct, especially after negative sign handling
+                  if (processedValue.length > len) {
+                      // This might happen if padding logic for negative numbers was slightly off
+                       console.warn(`Re-truncating value "${processedValue}" to length ${len} after padding`);
+                       if (padDir === 'left') {
+                           processedValue = processedValue.slice(-len); // Keep rightmost for left padding
+                       } else {
+                            processedValue = processedValue.slice(0, len); // Keep leftmost for right padding
+                       }
+
+                  } else if (processedValue.length < len && padDir === 'left') {
+                       // This might happen if initial padding was insufficient
+                       processedValue = padChar.repeat(len - processedValue.length) + processedValue;
+                  }
+
+
              } else {
                  processedValue = ''; // If length is 0, output empty string for positional
              }
@@ -1181,31 +1308,6 @@ export default function Home() {
         toast({ title: "Download Iniciado", description: `Arquivo ${outputFileName} sendo baixado.`});
     };
 
-  const resetState = () => {
-    setFile(null);
-    setFileName('');
-    setHeaders([]);
-    setFileData([]);
-    setColumnMappings([]);
-    setOutputConfig({ format: 'txt', fields: [] });
-    // Don't reset predefined fields to keep custom additions? Or reset?
-    // setPredefinedFields(PREDEFINED_FIELDS); // Uncomment to reset custom fields
-    setNewFieldName('');
-    setConvertedData('');
-    setOutputEncoding('UTF-8'); // Reset encoding
-    setIsProcessing(false);
-    setProcessingMessage('Processando...');
-    setActiveTab("upload");
-    setShowPreview(false);
-     setStaticFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', staticValue: '', length: '', paddingChar: ' ', paddingDirection: 'right' });
-    const fileInput = document.getElementById('file-upload') as HTMLInputElement;
-    if (fileInput) fileInput.value = '';
-     toast({ title: "Pronto", description: "Formulário resetado para nova conversão." });
-  };
-
-  const getSampleData = () => {
-    return fileData.slice(0, 5); // Show first 5 rows as sample
-  };
 
  // Render helper for Output Field selection for MAPPED fields
  const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig) => {
@@ -1302,7 +1404,7 @@ export default function Home() {
 
             {/* 2. Mapping Tab */}
             <TabsContent value="mapping">
-              {isProcessing && (
+              {isProcessing && activeTab === "mapping" && ( // Show loader only on mapping tab if processing
                  <div className="flex items-center justify-center text-accent animate-pulse p-4">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       {processingMessage}
@@ -1522,7 +1624,7 @@ export default function Home() {
 
             {/* 3. Configuration Tab */}
             <TabsContent value="config">
-              {isProcessing && (
+              {isProcessing && activeTab === "config" && ( // Show loader only on config tab if processing
                  <div className="flex items-center justify-center text-accent animate-pulse p-4">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       {processingMessage}
@@ -1823,7 +1925,7 @@ export default function Home() {
 
              {/* 4. Result Tab */}
             <TabsContent value="result">
-               {isProcessing && (
+               {isProcessing && activeTab === "result" && ( // Show loader only on result tab if processing
                  <div className="flex items-center justify-center text-accent animate-pulse p-4">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       {processingMessage}
@@ -1974,10 +2076,3 @@ export default function Home() {
     </div>
   );
 }
-
-// // Placeholder for PDF extraction - Keep this minimal or implement properly server-side
-// async function extractTextFromPdf(data: ArrayBuffer): Promise<string> {
-//   console.warn("extractTextFromPdf is a placeholder and needs proper implementation.");
-//   return Promise.resolve("Texto extraído do PDF (placeholder)\nLinha 2 do PDF (placeholder)");
-// }
-
