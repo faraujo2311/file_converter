@@ -3,8 +3,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-// pdf-parse needs specific handling for Node vs Browser, might need server-side processing
-// import pdf from 'pdf-parse/lib/pdf-parse'; // Example, requires adjustments
+import iconv from 'iconv-lite'; // Import iconv-lite for encoding
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,24 +13,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit } from 'lucide-react'; // Added Edit
+import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code } from 'lucide-react'; // Added Edit, Code
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog"; // Import Dialog components
 
 // Define types
-type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Contábil' | 'Data' | 'Texto' | 'CPF';
+type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Contábil' | 'Data' | 'Texto' | 'CPF' | 'CNPJ'; // Added CNPJ
 type PredefinedField = { id: string; name: string };
 type ColumnMapping = {
   originalHeader: string;
   mappedField: string | null; // ID of predefined field or null
   dataType: DataType | null;
   length?: number | null;
-  removeMask: boolean; // New field for mask removal
+  removeMask: boolean;
 };
 type OutputFormat = 'txt' | 'csv';
 type PaddingDirection = 'left' | 'right';
+type DateFormat = 'YYYYMMDD' | 'DDMMYYYY'; // Added DateFormat type
+type OutputEncoding = 'UTF-8' | 'ISO-8859-1' | 'Windows-1252'; // Added OutputEncoding type
 
 // Consolidated Output Field Type using discriminated union
 type OutputFieldConfig = {
@@ -40,6 +41,7 @@ type OutputFieldConfig = {
   length?: number; // Required for TXT
   paddingChar?: string; // For TXT
   paddingDirection?: PaddingDirection; // For TXT
+  dateFormat?: DateFormat; // For Data type fields
 } & (
   | { isStatic: false; mappedField: string } // Mapped field
   | { isStatic: true; fieldName: string; staticValue: string } // Static field
@@ -71,21 +73,24 @@ const PREDEFINED_FIELDS: PredefinedField[] = [
   { id: 'rg', name: 'RG' },
   { id: 'nome', name: 'Nome' },
   { id: 'email', name: 'E-mail' },
+  { id: 'cnpj', name: 'CNPJ' }, // Added CNPJ to predefined if needed, or just use type
 ];
 
-const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Contábil', 'Data', 'Texto', 'CPF'];
+const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Contábil', 'Data', 'Texto', 'CPF', 'CNPJ']; // Added CNPJ
+const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252']; // Added encodings
+
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
 
 // Helper to check if a data type is numeric-like
 const isNumericType = (dataType: DataType | null): boolean => {
-    return dataType === 'Inteiro' || dataType === 'Numérico' || dataType === 'Contábil' || dataType === 'CPF';
+    return dataType === 'Inteiro' || dataType === 'Numérico' || dataType === 'Contábil' || dataType === 'CPF' || dataType === 'CNPJ';
 }
 
 // Helper to get default padding char based on type
 const getDefaultPaddingChar = (field: OutputFieldConfig, mappings: ColumnMapping[]): string => {
     if (field.isStatic) {
         // Default to space for static unless value is purely numeric
-        return /^\d+$/.test(field.staticValue) ? '0' : ' ';
+        return /^-?\d+$/.test(field.staticValue) ? '0' : ' ';
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
         return isNumericType(mapping?.dataType ?? null) ? '0' : ' ';
@@ -96,10 +101,39 @@ const getDefaultPaddingChar = (field: OutputFieldConfig, mappings: ColumnMapping
 const getDefaultPaddingDirection = (field: OutputFieldConfig, mappings: ColumnMapping[]): PaddingDirection => {
      if (field.isStatic) {
         // Default to left for static if value is purely numeric
-        return /^\d+$/.test(field.staticValue) ? 'left' : 'right';
+        return /^-?\d+$/.test(field.staticValue) ? 'left' : 'right';
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
         return isNumericType(mapping?.dataType ?? null) ? 'left' : 'right';
+    }
+}
+
+// Helper to format number to specified decimals (handles negatives)
+const formatNumber = (value: string | number, decimals: number): string => {
+    const num = Number(String(value).replace(/[^0-9.-]/g, '')); // Keep negative sign
+    if (isNaN(num)) return '';
+    return num.toFixed(decimals);
+}
+
+// Helper to remove mask based on type
+const removeMask = (value: string, dataType: DataType | null): string => {
+    if (!dataType) return value;
+
+    switch (dataType) {
+        case 'CPF':
+        case 'CNPJ':
+        case 'Inteiro':
+        case 'Numérico':
+            return value.replace(/\D/g, ''); // Remove all non-digits
+        case 'Contábil':
+             // Remove currency symbols, thousands separators, keep decimal comma/dot and negative sign
+             return value.replace(/[R$.,\s]/g, '').replace(',', '.');
+        case 'RG':
+            return value.replace(/[.-]/g, ''); // Basic RG mask removal
+        case 'Data':
+            return value.replace(/\D/g, ''); // Remove slashes, dashes etc.
+        default:
+            return value;
     }
 }
 
@@ -114,7 +148,8 @@ export default function Home() {
   const [outputConfig, setOutputConfig] = useState<OutputConfig>({ format: 'txt', fields: [] });
   const [predefinedFields, setPredefinedFields] = useState<PredefinedField[]>(PREDEFINED_FIELDS);
   const [newFieldName, setNewFieldName] = useState<string>('');
-  const [convertedData, setConvertedData] = useState<string>('');
+  const [convertedData, setConvertedData] = useState<string | Buffer>(''); // Can be string or Buffer
+  const [outputEncoding, setOutputEncoding] = useState<OutputEncoding>('UTF-8'); // State for encoding
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>("upload");
   const [showPreview, setShowPreview] = useState<boolean>(false);
@@ -128,6 +163,7 @@ export default function Home() {
         paddingDirection: 'right',
     });
 
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'; // Get version
 
   // --- File Handling ---
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -171,14 +207,15 @@ export default function Home() {
           const workbook = XLSX.read(data, { type: 'array' });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          extractedData = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' }); // Read everything as string, handle empty cells
+          // Read with raw: true initially to preserve original formatting for numeric types
+          extractedData = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: '' });
 
           if (extractedData.length > 0) {
              extractedHeaders = extractedData[0].map(String); // First row as headers
              extractedData = extractedData.slice(1).map(row => { // Remaining rows as data
                const rowData: { [key: string]: any } = {};
                extractedHeaders.forEach((header, index) => {
-                 rowData[header] = String(row[index] ?? ''); // Ensure data is string
+                 rowData[header] = row[index] ?? ''; // Use raw value or empty string
                });
                return rowData;
              });
@@ -200,13 +237,18 @@ export default function Home() {
 
         setHeaders(extractedHeaders);
         setFileData(extractedData);
-        setColumnMappings(extractedHeaders.map(header => ({
-          originalHeader: header,
-          mappedField: guessPredefinedField(header),
-          dataType: guessDataType(header),
-          length: null,
-          removeMask: !!guessPredefinedField(header) && ['cpf', 'rg'].includes(guessPredefinedField(header)!), // Default mask removal for CPF/RG
-        })));
+        setColumnMappings(extractedHeaders.map(header => {
+            const guessedField = guessPredefinedField(header);
+            const guessedType = guessDataType(header);
+            return {
+                originalHeader: header,
+                mappedField: guessedField,
+                dataType: guessedType,
+                length: null,
+                // Default mask removal for CPF/RG/CNPJ/Date
+                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || guessedType === 'Data',
+            }
+        }));
       };
       reader.onerror = () => {
         throw new Error("Falha ao ler o arquivo.");
@@ -243,7 +285,7 @@ export default function Home() {
            currentMapping.length = null; // Reset length if not text-based
          }
          // Set default mask removal based on type
-         currentMapping.removeMask = actualValue === 'CPF' || actualValue === 'RG';
+         currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data'].includes(actualValue ?? '');
 
        } else if (field === 'length') {
            const numValue = parseInt(value, 10);
@@ -252,10 +294,13 @@ export default function Home() {
            currentMapping.removeMask = Boolean(value); // Ensure boolean
        } else {
           (currentMapping[field] as any) = actualValue;
-          // Auto-set data type if mapping to CPF or RG and not already set
-            if (field === 'mappedField' && actualValue && (actualValue === 'cpf' || actualValue === 'rg') && !currentMapping.dataType) {
-                currentMapping.dataType = 'CPF'; // or derive based on ID
-                currentMapping.removeMask = true; // Default mask removal
+          // Auto-set data type if mapping to specific types and not already set
+            if (field === 'mappedField' && actualValue && !currentMapping.dataType) {
+                 if (actualValue === 'cpf') currentMapping.dataType = 'CPF';
+                 else if (actualValue === 'cnpj') currentMapping.dataType = 'CNPJ';
+                 else if (actualValue === 'rg') currentMapping.dataType = 'Alfanumérico'; // RG is often alphanumeric
+                 // Add more specific types if needed
+                 currentMapping.removeMask = ['cpf', 'cnpj', 'rg'].includes(actualValue) || currentMapping.dataType === 'Data';
             }
        }
 
@@ -273,6 +318,7 @@ export default function Home() {
           'rg': ['rg', 'identidade', 'registro geral'],
           'nome': ['nome', 'nome completo', 'funcionário', 'colaborador', 'name'],
           'email': ['email', 'e-mail', 'correio eletrônico', 'contato'],
+          'cnpj': ['cnpj', 'cadastro nacional pessoa jurídica'], // Added CNPJ guess
       };
 
       for (const fieldId in guesses) {
@@ -285,15 +331,15 @@ export default function Home() {
 
   const guessDataType = (header: string): DataType | null => {
       const lowerHeader = header.toLowerCase().trim();
+      if (lowerHeader.includes('cnpj')) return 'CNPJ'; // Guess CNPJ first
       if (lowerHeader.includes('cpf')) return 'CPF';
       if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG can have letters
-      if (lowerHeader.includes('data') || lowerHeader.includes('date')) return 'Data';
-      if (lowerHeader.includes('valor') || lowerHeader.includes('salário') || lowerHeader.includes('contábil')) return 'Contábil';
-      if (lowerHeader.includes('num') || lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico';
-      if (lowerHeader.includes('matrícula') || lowerHeader.includes('código') || lowerHeader.includes('id')) return 'Inteiro';
-      if (lowerHeader.includes('nome') || lowerHeader.includes('descrição') || lowerHeader.includes('texto')) return 'Texto';
-      if (/[a-zA-Z]/.test(lowerHeader)) return 'Alfanumérico';
-      if (/^\d+$/.test(lowerHeader)) return 'Inteiro';
+      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data'; // Expanded date guess
+      if (lowerHeader.includes('valor') || lowerHeader.includes('salário') || lowerHeader.includes('contábil') || lowerHeader.includes('saldo') || lowerHeader.includes('preço')) return 'Contábil';
+      if (lowerHeader.includes('num') || lowerHeader.includes('idade') || lowerHeader.includes('quant') || /^\d+(\.\d+)?$/.test(lowerHeader)) return 'Numérico'; // Include purely numeric headers
+      if (lowerHeader.includes('matrícula') || lowerHeader.includes('código') || lowerHeader.includes('id') || /^\d+$/.test(lowerHeader)) return 'Inteiro'; // Guess integer for purely digit headers
+      if (lowerHeader.includes('nome') || lowerHeader.includes('descrição') || lowerHeader.includes('texto') || lowerHeader.includes('obs')) return 'Texto';
+      if (/[a-zA-Z]/.test(lowerHeader)) return 'Alfanumérico'; // Default to alphanumeric if letters present
 
       return null; // No guess
   }
@@ -321,7 +367,8 @@ export default function Home() {
 
   const removePredefinedField = (idToRemove: string) => {
     const fieldToRemove = predefinedFields.find(f => f.id === idToRemove);
-    if (fieldToRemove && ['matricula', 'cpf', 'rg', 'nome', 'email'].includes(idToRemove)) {
+     const coreFields = ['matricula', 'cpf', 'rg', 'nome', 'email', 'cnpj']; // Include CNPJ
+     if (fieldToRemove && coreFields.includes(idToRemove)) {
          toast({ title: "Aviso", description: `Não é possível remover o campo pré-definido "${fieldToRemove.name}".`, variant: "default" });
          return;
      }
@@ -362,7 +409,7 @@ export default function Home() {
     setOutputConfig(prev => ({ ...prev, delimiter: event.target.value }));
   };
 
-  const handleOutputFieldChange = (id: string, field: keyof OutputFieldConfig, value: any) => {
+ const handleOutputFieldChange = (id: string, field: keyof OutputFieldConfig, value: any) => {
     setOutputConfig(prev => {
         const newFields = prev.fields.map(f => {
             if (f.id === id) {
@@ -372,13 +419,19 @@ export default function Home() {
                 if (field === 'mappedField') {
                     if (!updatedField.isStatic) {
                         updatedField.mappedField = actualValue;
-                        // Update length, padding based on the new mapped field if format is TXT
+                        const correspondingMapping = columnMappings.find(cm => cm.mappedField === actualValue);
+                        const dataType = correspondingMapping?.dataType ?? null;
+
+                        // Update format-specific props and data-type specific props
                         if (prev.format === 'txt') {
-                            const correspondingMapping = columnMappings.find(cm => cm.mappedField === actualValue);
-                            const dataType = correspondingMapping?.dataType ?? null;
                             updatedField.length = correspondingMapping?.length ?? 10;
                             updatedField.paddingChar = getDefaultPaddingChar(updatedField, columnMappings);
                             updatedField.paddingDirection = getDefaultPaddingDirection(updatedField, columnMappings);
+                        }
+                        if (dataType === 'Data') {
+                            updatedField.dateFormat = updatedField.dateFormat ?? 'YYYYMMDD'; // Default date format
+                        } else {
+                            delete updatedField.dateFormat; // Remove if not a date field
                         }
                     }
                 } else if (field === 'length') {
@@ -388,14 +441,15 @@ export default function Home() {
                     const numValue = parseInt(value, 10);
                     updatedField.order = isNaN(numValue) ? (prev.fields.length > 0 ? Math.max(...prev.fields.map(f => f.order)) + 1 : 0) : numValue;
                 } else if (field === 'paddingChar') {
-                    updatedField.paddingChar = String(value).slice(0, 1); // Allow only one character
+                    updatedField.paddingChar = String(value).slice(0, 1);
                 } else if (field === 'paddingDirection') {
                     updatedField.paddingDirection = value as PaddingDirection;
+                } else if (field === 'dateFormat') {
+                     updatedField.dateFormat = value as DateFormat;
                 }
-                // Note: Static field properties (fieldName, staticValue) are handled by the dialog
+                // Static field properties handled by dialog
                 else {
-                    // Fallback for any other direct property update (shouldn't usually happen here)
-                     (updatedField as any)[field] = actualValue;
+                    (updatedField as any)[field] = actualValue;
                 }
                 return updatedField;
             }
@@ -437,6 +491,7 @@ export default function Home() {
         length: outputConfig.format === 'txt' ? (defaultLength ?? 10) : undefined,
         paddingChar: outputConfig.format === 'txt' ? getDefaultPaddingChar({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings) : undefined,
         paddingDirection: outputConfig.format === 'txt' ? getDefaultPaddingDirection({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings) : undefined,
+        dateFormat: dataType === 'Data' ? 'YYYYMMDD' : undefined, // Default date format if applicable
     };
 
     setOutputConfig(prev => ({
@@ -519,6 +574,7 @@ export default function Home() {
              length: outputConfig.format === 'txt' ? len : undefined,
              paddingChar: outputConfig.format === 'txt' ? paddingChar : undefined,
              paddingDirection: outputConfig.format === 'txt' ? paddingDirection : undefined,
+              // Cannot have dateFormat for static fields
          };
 
 
@@ -561,6 +617,7 @@ export default function Home() {
                     length: (dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? 10) : undefined,
                     paddingChar: undefined, // Will be set based on format
                     paddingDirection: undefined, // Will be set based on format
+                    dateFormat: dataType === 'Data' ? 'YYYYMMDD' : undefined, // Add default date format
                 };
                 // Add format-specific defaults
                 if (outputConfig.format === 'txt') {
@@ -591,6 +648,12 @@ export default function Home() {
 
             const newFields = allPotentialFields.map((potentialField, index) => {
                 const existingField = existingFieldsMap.get(potentialField.id);
+                let correspondingMapping: ColumnMapping | undefined;
+                if(!potentialField.isStatic) {
+                    correspondingMapping = columnMappings.find(cm => cm.mappedField === potentialField.mappedField);
+                }
+                const dataType = correspondingMapping?.dataType ?? null;
+
 
                 if (existingField) {
                     // If field exists (by ID), update its properties based on format/mapping changes
@@ -606,6 +669,13 @@ export default function Home() {
                         delete updatedExistingField.paddingChar;
                         delete updatedExistingField.paddingDirection;
                     }
+                     // Update or add dateFormat if it's a date field
+                     if (!updatedExistingField.isStatic && dataType === 'Data') {
+                        updatedExistingField.dateFormat = updatedExistingField.dateFormat ?? potentialField.dateFormat ?? 'YYYYMMDD';
+                    } else if (!updatedExistingField.isStatic) {
+                        delete updatedExistingField.dateFormat; // Remove if not date
+                    }
+
                      // Preserve original order from existing field
                     updatedExistingField.order = existingField.order;
                     return updatedExistingField;
@@ -622,6 +692,12 @@ export default function Home() {
                         delete newField.length;
                         delete newField.paddingChar;
                         delete newField.paddingDirection;
+                    }
+                     // Ensure dateFormat is set correctly for new date fields
+                     if (!newField.isStatic && dataType === 'Data') {
+                        newField.dateFormat = newField.dateFormat ?? 'YYYYMMDD';
+                    } else if (!newField.isStatic) {
+                        delete newField.dateFormat;
                     }
 
                     return newField;
@@ -681,10 +757,16 @@ export default function Home() {
         setIsProcessing(false);
         return;
     }
+    // Validate date fields have dateFormat selected
+    if (outputConfig.fields.some(f => !f.isStatic && columnMappings.find(cm => cm.mappedField === f.mappedField)?.dataType === 'Data' && !f.dateFormat)) {
+        toast({ title: "Erro", description: "Selecione um 'Formato Data' para todos os campos do tipo Data na saída.", variant: "destructive" });
+        setIsProcessing(false);
+        return;
+    }
 
 
     try {
-      let result = '';
+      let resultString = '';
       const sortedOutputFields = [...outputConfig.fields].sort((a, b) => a.order - b.order);
 
       fileData.forEach(row => {
@@ -693,73 +775,124 @@ export default function Home() {
           let value = '';
           let mapping: ColumnMapping | undefined;
           let dataType: DataType | null = null;
+          let originalValue: any = null; // Store original value before processing
 
           if (outputField.isStatic) {
              value = outputField.staticValue ?? '';
+             originalValue = value;
              // Treat static numeric strings for padding purposes
-             dataType = /^\d+$/.test(value) ? 'Numérico' : 'Texto';
+             dataType = /^-?\d+([.,]\d+)?$/.test(value) ? 'Numérico' : 'Texto';
           } else {
              mapping = columnMappings.find(m => m.mappedField === outputField.mappedField);
              if (!mapping || !mapping.originalHeader) {
                  console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
                  value = ''; // Default to empty string if mapping missing
              } else {
-                 value = String(row[mapping.originalHeader] ?? '').trim(); // Get value, ensure string, trim
+                 originalValue = row[mapping.originalHeader] ?? ''; // Get original value
+                 value = String(originalValue).trim(); // Work with the string representation, trim
                  dataType = mapping.dataType; // Get data type from mapping
 
                  // Apply mask removal if configured
-                  if (mapping.removeMask && dataType) { // Only remove if type is known
-                      if (dataType === 'CPF') {
-                          value = value.replace(/\D/g, ''); // Remove non-digits
-                      } else if (dataType === 'RG') {
-                         // Basic RG mask removal (adjust regex as needed for common formats)
-                         value = value.replace(/[.-]/g, '');
-                      }
-                     // Add more mask removals for other types if needed
+                  if (mapping.removeMask && dataType) {
+                      value = removeMask(value, dataType);
                   }
 
 
                  // Apply formatting/validation based on dataType (AFTER mask removal)
                  switch (dataType) {
                       case 'CPF':
-                           value = value.replace(/\D/g, ''); // Ensure only digits remain after potential mask removal
-                          if (outputConfig.format === 'txt') {
-                               // Padding happens later
-                           }
-                          break;
+                      case 'CNPJ':
                       case 'Inteiro':
+                           value = value.replace(/\D/g, ''); // Ensure only digits remain
+                           break;
                       case 'Numérico':
-                          value = value.replace(/\D/g, '');
+                           // Handle different numeric inputs (0, 130, 179.1, -350) -> format to "0.00", "130.00", "179.10", "-350.00"
+                           // Allow negative sign and decimal separator (dot or comma)
+                            value = value.replace(/,/g, '.'); // Standardize decimal separator to dot
+                            const numMatch = value.match(/^(-?\d+\.?\d*)|(^-?\d*)/); // Match number, allow leading/trailing dot, handle negative
+                            if (numMatch && numMatch[0]) {
+                                let numVal = parseFloat(numMatch[0]);
+                                if (isNaN(numVal)) {
+                                    value = '0.00'; // Default to 0.00 if parsing fails
+                                } else {
+                                    value = numVal.toFixed(2); // Format to 2 decimal places
+                                }
+                            } else {
+                                value = '0.00'; // Default if no valid number found
+                            }
                           break;
                       case 'Contábil':
-                          value = value.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.');
-                          let numValue = parseFloat(value);
-                          if (isNaN(numValue)) {
-                              value = '';
-                          } else {
-                              // Format as cents (e.g., 1234.56 -> 123456)
-                               value = numValue.toFixed(2).replace('.', '');
-                               // Padding with zeros happens later for TXT
-                          }
+                           // Similar to numeric but might need specific accounting format (e.g., no decimal for cents)
+                            value = value.replace(/,/g, '.'); // Standardize decimal separator
+                            const accMatch = value.match(/^(-?\d+\.?\d*)|(^-?\d*)/);
+                            if (accMatch && accMatch[0]) {
+                                let accVal = parseFloat(accMatch[0]);
+                                if (isNaN(accVal)) {
+                                    value = '000'; // Or appropriate default for accounting integer format
+                                } else {
+                                    // Format as cents integer (e.g., 1234.56 -> 123456, -350.00 -> -35000)
+                                     value = Math.round(accVal * 100).toString();
+                                }
+                            } else {
+                                value = '000'; // Default
+                            }
                           break;
                       case 'Data':
                           try {
-                              let date = new Date(value.replace(/(\d{2})\/(\d{2})\/(\d{4})/, '$3-$2-$1')); // DD/MM/YYYY
-                              if (isNaN(date.getTime())) date = new Date(value); // Try direct parse
-                              if (!isNaN(date.getTime())) {
-                                  const year = date.getFullYear();
-                                  const month = String(date.getMonth() + 1).padStart(2, '0');
-                                  const day = String(date.getDate()).padStart(2, '0');
-                                  value = `${year}${month}${day}`; // Format YYYYMMDD
-                              } else {
-                                  value = '';
+                              let parsedDate: Date | null = null;
+                              // Attempt parsing common formats (DD/MM/YYYY, YYYY-MM-DD, MM/DD/YYYY etc.)
+                              // This needs a more robust date parsing library for real-world scenarios
+                              const cleanedDate = value.replace(/\D/g, ''); // Remove separators first if mask removed
+                              let year = '', month = '', day = '';
+
+                              if (cleanedDate.length === 8) { // Assume YYYYMMDD or DDMMYYYY or MMDDYYYY
+                                 if (mapping?.removeMask || /^\d{8}$/.test(value)) {
+                                      // Try YYYYMMDD first
+                                      year = cleanedDate.substring(0, 4);
+                                      month = cleanedDate.substring(4, 6);
+                                      day = cleanedDate.substring(6, 8);
+                                      parsedDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                                      if (isNaN(parsedDate.getTime())) { // If YYYYMMDD failed, try DDMMYYYY
+                                          year = cleanedDate.substring(4, 8);
+                                          month = cleanedDate.substring(2, 4);
+                                          day = cleanedDate.substring(0, 2);
+                                          parsedDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                                      }
+                                      if (isNaN(parsedDate.getTime())) { // If DDMMYYYY failed, try MMDDYYYY
+                                          year = cleanedDate.substring(4, 8);
+                                          month = cleanedDate.substring(0, 2);
+                                          day = cleanedDate.substring(2, 4);
+                                          parsedDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                                      }
+
+                                 }
                               }
-                          } catch { value = ''; }
+
+                              // Fallback to Date constructor if specific parsing failed or mask wasn't removed/didn't match
+                              if (!parsedDate || isNaN(parsedDate.getTime())) {
+                                  parsedDate = new Date(value); // Less reliable, depends on browser locale
+                              }
+
+
+                              if (parsedDate && !isNaN(parsedDate.getTime())) {
+                                  const y = parsedDate.getFullYear();
+                                  const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
+                                  const d = String(parsedDate.getDate()).padStart(2, '0');
+                                  const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Use configured format
+                                  value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
+                              } else {
+                                  console.warn(`Could not parse date: ${originalValue}`);
+                                  value = ''; // Set to empty if parsing fails
+                              }
+                          } catch (e) {
+                                console.error(`Error parsing date: ${originalValue}`, e);
+                                value = '';
+                          }
                           break;
                       case 'Alfanumérico':
                       case 'Texto':
                       default:
-                          // Value is already trimmed string
+                          // Value is already trimmed string, potentially with mask removed
                           break;
                  }
              }
@@ -768,39 +901,75 @@ export default function Home() {
 
           // --- Apply Output Formatting (TXT Padding or CSV Delimiting) ---
           if (outputConfig.format === 'txt') {
-             const len = outputField.length || 0; // Should always have length by validation
-             const padChar = outputField.paddingChar || ' '; // Default space
-             const padDir = outputField.paddingDirection || 'right'; // Default right
+             const len = outputField.length || 0;
+             const padChar = outputField.paddingChar || ' ';
+             const padDir = outputField.paddingDirection || 'right';
+             let processedValue = value; // Value already holds the formatted/cleaned data
 
-             // Truncate or Pad
-              if (value.length > len) {
-                  value = value.substring(0, len); // Truncate if too long
-              } else if (value.length < len) {
-                  const padLen = len - value.length;
-                  if (padDir === 'left') {
-                      value = padChar.repeat(padLen) + value;
-                  } else { // padDir === 'right'
-                      value = value + padChar.repeat(padLen);
-                  }
-              }
-             line += value;
+              // Special handling for negative numeric/contabil values in TXT
+             if ((dataType === 'Numérico' || dataType === 'Contábil') && processedValue.startsWith('-')) {
+                 const absValue = processedValue.substring(1); // Get absolute value part
+                 const negativeSign = '-';
+                 if (len > 0) {
+                     if (absValue.length >= len) {
+                         // If absolute value alone fills/exceeds length, truncate (might lose sign) - suboptimal
+                         processedValue = absValue.substring(absValue.length - len);
+                     } else {
+                          const padLen = len - absValue.length - negativeSign.length; // Account for sign length
+                          if (padLen >= 0) {
+                              if (padDir === 'left') { // Pad left, sign usually comes first
+                                  processedValue = negativeSign + padChar.repeat(padLen) + absValue;
+                              } else { // Pad right (less common for numbers, but possible)
+                                   // Sign position needs clarification - assuming sign stays with number
+                                   processedValue = negativeSign + absValue + padChar.repeat(padLen);
+                                   // Ensure total length constraint, might truncate number if padChar added
+                                   if(processedValue.length > len) processedValue = processedValue.substring(0, len);
+
+                              }
+                          } else {
+                              // Not enough space for sign and value, truncate value
+                               processedValue = (negativeSign + absValue).substring(0, len);
+                          }
+                     }
+                 }
+             }
+             // Standard padding/truncating for non-negative or non-numeric
+             else {
+                  if (processedValue.length > len) {
+                     processedValue = processedValue.substring(0, len); // Truncate
+                  } else if (processedValue.length < len) {
+                     const padLen = len - processedValue.length;
+                     if (padDir === 'left') {
+                         processedValue = padChar.repeat(padLen) + processedValue;
+                     } else { // right
+                         processedValue = processedValue + padChar.repeat(padLen);
+                     }
+                 }
+             }
+
+             line += processedValue;
 
           } else if (outputConfig.format === 'csv') {
             if (fieldIndex > 0) {
               line += outputConfig.delimiter;
             }
-             // Basic CSV escaping
-             const needsQuotes = value.includes(outputConfig.delimiter!) || value.includes('"') || value.includes('\n');
+             // Basic CSV escaping - use original unformatted value if needed? Check requirements.
+             // Using the processed 'value' for now.
+             let csvValue = value;
+             const needsQuotes = csvValue.includes(outputConfig.delimiter!) || csvValue.includes('"') || csvValue.includes('\n');
              if (needsQuotes) {
-                value = `"${value.replace(/"/g, '""')}"`;
+                csvValue = `"${csvValue.replace(/"/g, '""')}"`;
             }
-            line += value;
+            line += csvValue;
           }
         });
-        result += line + '\n';
+        resultString += line + '\n';
       });
 
-      setConvertedData(result.trimEnd());
+       // Encode the result string to the selected encoding
+        const resultBuffer = iconv.encode(resultString.trimEnd(), outputEncoding);
+        setConvertedData(resultBuffer); // Store as Buffer
+
       setActiveTab("result");
       toast({ title: "Sucesso", description: "Arquivo convertido com sucesso!" });
     } catch (error: any) {
@@ -818,7 +987,15 @@ export default function Home() {
    const downloadConvertedFile = () => {
         if (!convertedData) return;
 
-        const blob = new Blob([convertedData], { type: outputConfig.format === 'txt' ? 'text/plain;charset=utf-8' : 'text/csv;charset=utf-8' });
+        const mimeType = outputConfig.format === 'txt'
+            ? `text/plain;charset=${outputEncoding.toLowerCase()}`
+            : `text/csv;charset=${outputEncoding.toLowerCase()}`;
+
+         // Create Blob from Buffer or string
+         const blob = convertedData instanceof Buffer
+             ? new Blob([convertedData], { type: mimeType })
+             : new Blob([convertedData], { type: mimeType }); // Fallback if it's somehow a string
+
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -841,6 +1018,7 @@ export default function Home() {
     setPredefinedFields(PREDEFINED_FIELDS);
     setNewFieldName('');
     setConvertedData('');
+    setOutputEncoding('UTF-8'); // Reset encoding
     setIsProcessing(false);
     setActiveTab("upload");
     setShowPreview(false);
@@ -979,24 +1157,24 @@ export default function Home() {
                            <Table>
                              <TableHeader>
                                <TableRow>
-                                 <TableHead className="w-1/4">Coluna Original</TableHead>
-                                 <TableHead className="w-1/4">Mapear para Campo</TableHead>
-                                 <TableHead className="w-1/6">Tipo</TableHead>
-                                 <TableHead className="w-1/12"> {/* Smaller width */}
-                                     Tamanho
+                                 <TableHead className="w-[22%]">Coluna Original</TableHead>
+                                 <TableHead className="w-[22%]">Mapear para Campo</TableHead>
+                                 <TableHead className="w-[18%]">Tipo</TableHead>
+                                 <TableHead className="w-[10%]"> {/* Size */}
+                                     Tam.
                                     <TooltipProvider>
                                         <Tooltip>
                                             <TooltipTrigger asChild>
                                                 <HelpCircle className="inline-block ml-1 h-4 w-4 text-muted-foreground cursor-help" />
                                             </TooltipTrigger>
                                             <TooltipContent>
-                                                <p>Opcional. Define o tamanho máx. para exportação (TXT).</p>
-                                                <p>Relevante para Alfanumérico/Texto.</p>
+                                                <p>Opcional. Define o tamanho máx.</p>
+                                                <p>Relevante para Alfanumérico/Texto (TXT).</p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
                                  </TableHead>
-                                 <TableHead className="w-1/6"> {/* Adjusted width */}
+                                 <TableHead className="w-[20%] text-center"> {/* Remove Mask */}
                                      Remover Máscara
                                       <TooltipProvider>
                                         <Tooltip>
@@ -1004,8 +1182,8 @@ export default function Home() {
                                                 <HelpCircle className="inline-block ml-1 h-4 w-4 text-muted-foreground cursor-help" />
                                             </TooltipTrigger>
                                             <TooltipContent>
-                                                <p>Remove caracteres não numéricos (ex: pontos, traços).</p>
-                                                <p>Útil para CPF, RG, etc.</p>
+                                                <p>Remove caracteres não numéricos/separadores.</p>
+                                                <p>Útil para CPF, CNPJ, RG, Data, Numérico, etc.</p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
@@ -1015,14 +1193,14 @@ export default function Home() {
                              <TableBody>
                                {columnMappings.map((mapping, index) => (
                                  <TableRow key={index}>
-                                   <TableCell className="font-medium">{mapping.originalHeader}</TableCell>
+                                   <TableCell className="font-medium text-xs">{mapping.originalHeader}</TableCell>
                                    <TableCell>
                                      <Select
                                        value={mapping.mappedField || NONE_VALUE_PLACEHOLDER}
                                        onValueChange={(value) => handleMappingChange(index, 'mappedField', value)}
                                         disabled={isProcessing}
                                      >
-                                       <SelectTrigger>
+                                       <SelectTrigger className="text-xs h-8">
                                          <SelectValue placeholder="Selecione ou deixe em branco" />
                                        </SelectTrigger>
                                        <SelectContent>
@@ -1039,7 +1217,7 @@ export default function Home() {
                                        onValueChange={(value) => handleMappingChange(index, 'dataType', value)}
                                        disabled={isProcessing || !mapping.mappedField}
                                      >
-                                       <SelectTrigger>
+                                       <SelectTrigger className="text-xs h-8">
                                          <SelectValue placeholder="Tipo" />
                                        </SelectTrigger>
                                        <SelectContent>
@@ -1057,7 +1235,7 @@ export default function Home() {
                                        value={mapping.length ?? ''}
                                        onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
                                        placeholder="Tam." // Shorter placeholder
-                                       className="w-full"
+                                       className="w-full text-xs h-8"
                                        disabled={isProcessing || !mapping.dataType || !['Alfanumérico', 'Texto'].includes(mapping.dataType)}
                                      />
                                    </TableCell>
@@ -1065,8 +1243,10 @@ export default function Home() {
                                       <Switch
                                           checked={mapping.removeMask}
                                           onCheckedChange={(checked) => handleMappingChange(index, 'removeMask', checked)}
-                                          disabled={isProcessing || !mapping.mappedField || !['CPF', 'RG', 'Numérico', 'Inteiro', 'Contábil'].includes(mapping.dataType ?? '')} // Enable for relevant types
+                                          // Enable for relevant types where mask removal makes sense
+                                          disabled={isProcessing || !mapping.mappedField || !['CPF', 'RG', 'CNPJ', 'Numérico', 'Inteiro', 'Contábil', 'Data'].includes(mapping.dataType ?? '')}
                                           aria-label={`Remover máscara para ${mapping.originalHeader}`}
+                                          className="scale-75" // Slightly smaller switch
                                       />
                                    </TableCell>
                                  </TableRow>
@@ -1107,7 +1287,7 @@ export default function Home() {
                                                       variant="ghost"
                                                       size="icon"
                                                       onClick={() => removePredefinedField(field.id)}
-                                                      disabled={isProcessing || ['matricula', 'cpf', 'rg', 'nome', 'email'].includes(field.id)}
+                                                      disabled={isProcessing || ['matricula', 'cpf', 'rg', 'nome', 'email', 'cnpj'].includes(field.id)}
                                                       className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50"
                                                       aria-label={`Remover campo ${field.name}`}
                                                   >
@@ -1116,7 +1296,7 @@ export default function Home() {
                                              </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>Remover campo "{field.name}"</p>
-                                                 {['matricula', 'cpf', 'rg', 'nome', 'email'].includes(field.id) && <p>(Este campo pré-definido não pode ser removido)</p>}
+                                                 {['matricula', 'cpf', 'rg', 'nome', 'email', 'cnpj'].includes(field.id) && <p>(Este campo pré-definido não pode ser removido)</p>}
                                             </TooltipContent>
                                         </Tooltip>
                                      </TooltipProvider>
@@ -1149,10 +1329,10 @@ export default function Home() {
                     <Card>
                         <CardHeader>
                              <CardTitle className="text-xl">Configuração do Arquivo de Saída</CardTitle>
-                             <CardDescription>Defina formato, delimitador (CSV), ordem, tamanho e preenchimento (TXT).</CardDescription>
+                             <CardDescription>Defina formato, codificação, delimitador (CSV), ordem e formatação dos campos.</CardDescription>
                          </CardHeader>
                          <CardContent className="space-y-4">
-                            <div className="flex flex-col md:flex-row gap-4">
+                            <div className="flex flex-col md:flex-row gap-4 items-end">
                                 <div className="flex-1">
                                     <Label htmlFor="output-format">Formato de Saída</Label>
                                     <Select
@@ -1170,13 +1350,43 @@ export default function Home() {
                                     </Select>
                                 </div>
 
+                                 <div className="flex-1">
+                                    <Label htmlFor="output-encoding">Codificação</Label>
+                                     <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                     <Button variant="ghost" size="icon" className="ml-1 h-6 w-6 text-muted-foreground cursor-help align-middle"><HelpCircle className="h-4 w-4" /></Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>Define a codificação de caracteres do arquivo de saída.</p>
+                                                    <p>UTF-8 é recomendado, ISO-8859-1 (Latin-1) ou Windows-1252 podem ser necessários para sistemas legados.</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                    </TooltipProvider>
+                                    <Select
+                                        value={outputEncoding}
+                                        onValueChange={(value) => setOutputEncoding(value as OutputEncoding)}
+                                        disabled={isProcessing}
+                                    >
+                                        <SelectTrigger id="output-encoding" className="w-full">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {OUTPUT_ENCODINGS.map(enc => (
+                                                <SelectItem key={enc} value={enc}>{enc}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+
                                 {outputConfig.format === 'csv' && (
                                     <div className="flex-1 md:max-w-[150px]">
                                         <Label htmlFor="csv-delimiter">Delimitador CSV</Label>
                                         <TooltipProvider>
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                     <Button variant="ghost" size="icon" className="ml-1 h-6 w-6 text-muted-foreground cursor-help"><HelpCircle className="h-4 w-4" /></Button>
+                                                     <Button variant="ghost" size="icon" className="ml-1 h-6 w-6 text-muted-foreground cursor-help align-middle"><HelpCircle className="h-4 w-4" /></Button>
                                                 </TooltipTrigger>
                                                 <TooltipContent>
                                                     <p>Caractere(s) para separar os campos (ex: | ; , ).</p>
@@ -1204,47 +1414,52 @@ export default function Home() {
                                      <Table>
                                          <TableHeader>
                                              <TableRow>
-                                                  <TableHead className="w-[70px]">Ordem</TableHead>
-                                                  <TableHead className="w-3/12">Campo</TableHead>
+                                                  <TableHead className="w-[60px]">Ordem</TableHead>
+                                                  <TableHead className="w-2/12">Campo</TableHead>
+                                                   <TableHead className="w-2/12">Formato Data</TableHead> {/* Date Format */}
                                                   {outputConfig.format === 'txt' && (
                                                       <>
-                                                          <TableHead className="w-2/12">
-                                                              Tamanho
+                                                          <TableHead className="w-1/12"> {/* Size */}
+                                                              Tam.
                                                               <TooltipProvider>
                                                                   <Tooltip>
                                                                       <TooltipTrigger asChild><HelpCircle className="inline-block ml-1 h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger>
-                                                                      <TooltipContent><p>Tamanho fixo (obrigatório).</p></TooltipContent>
+                                                                      <TooltipContent><p>Tamanho fixo.</p></TooltipContent>
                                                                   </Tooltip>
                                                               </TooltipProvider>
                                                           </TableHead>
-                                                           <TableHead className="w-2/12">
-                                                              Preencher
+                                                           <TableHead className="w-1/12"> {/* Padding Char */}
+                                                              Preench.
                                                                <TooltipProvider>
                                                                   <Tooltip>
                                                                       <TooltipTrigger asChild><HelpCircle className="inline-block ml-1 h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger>
-                                                                      <TooltipContent><p>Caractere usado para preencher.</p></TooltipContent>
+                                                                      <TooltipContent><p>Caractere (1).</p></TooltipContent>
                                                                   </Tooltip>
                                                               </TooltipProvider>
                                                            </TableHead>
-                                                           <TableHead className="w-2/12">
-                                                              Direção
+                                                           <TableHead className="w-2/12"> {/* Padding Direction */}
+                                                              Direção Preench.
                                                                <TooltipProvider>
                                                                   <Tooltip>
                                                                       <TooltipTrigger asChild><HelpCircle className="inline-block ml-1 h-4 w-4 text-muted-foreground cursor-help" /></TooltipTrigger>
                                                                       <TooltipContent>
-                                                                            <p>Direção do preenchimento.</p>
-                                                                            <p>Esquerda (ex: 001) ou Direita (ex: ABC ).</p>
+                                                                            <p>Esquerda (001) ou Direita (ABC ).</p>
                                                                        </TooltipContent>
                                                                   </Tooltip>
                                                               </TooltipProvider>
                                                            </TableHead>
                                                       </>
                                                   )}
-                                                  <TableHead className="w-1/12 text-right">Ações</TableHead>
+                                                  <TableHead className="w-[80px] text-right">Ações</TableHead>
                                              </TableRow>
                                          </TableHeader>
                                          <TableBody>
-                                             {outputConfig.fields.map((field) => (
+                                             {outputConfig.fields.map((field) => {
+                                                 const mapping = !field.isStatic ? columnMappings.find(cm => cm.mappedField === field.mappedField) : undefined;
+                                                 const dataType = mapping?.dataType ?? null;
+                                                 const isDateField = !field.isStatic && dataType === 'Data';
+
+                                                 return (
                                                  <TableRow key={field.id}>
                                                       <TableCell>
                                                          <Input
@@ -1252,22 +1467,37 @@ export default function Home() {
                                                              min="0"
                                                              value={field.order}
                                                              onChange={(e) => handleOutputFieldChange(field.id, 'order', e.target.value)}
-                                                             className="w-16"
+                                                             className="w-14 h-8 text-xs"
                                                              disabled={isProcessing}
                                                              aria-label={`Ordem do campo ${field.isStatic ? field.fieldName : (predefinedFields.find(pf => pf.id === field.mappedField)?.name ?? field.mappedField)}`}
                                                          />
                                                       </TableCell>
-                                                     <TableCell>
+                                                     <TableCell className="text-xs">
                                                          {field.isStatic ? (
                                                              <div className="flex items-center gap-1">
                                                                 <span className="font-medium text-blue-600 dark:text-blue-400" title={`Valor: ${field.staticValue}`}>{field.fieldName} (Estático)</span>
                                                                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-accent-foreground" onClick={() => openEditStaticFieldDialog(field)}>
-                                                                     <Edit className="h-4 w-4" />
+                                                                     <Edit className="h-3 w-3" />
                                                                  </Button>
                                                              </div>
                                                          ) : (
                                                             renderMappedOutputFieldSelect(field)
                                                          )}
+                                                     </TableCell>
+                                                     <TableCell> {/* Date Format Select */}
+                                                          <Select
+                                                               value={field.dateFormat ?? ''}
+                                                               onValueChange={(value) => handleOutputFieldChange(field.id, 'dateFormat', value)}
+                                                               disabled={isProcessing || !isDateField}
+                                                            >
+                                                                <SelectTrigger className={`w-full h-8 text-xs ${!isDateField ? 'invisible' : ''}`}>
+                                                                    <SelectValue placeholder="Formato Data" />
+                                                                </SelectTrigger>
+                                                                <SelectContent>
+                                                                    <SelectItem value="YYYYMMDD">AAAA MM DD</SelectItem>
+                                                                    <SelectItem value="DDMMYYYY">DD MM AAAA</SelectItem>
+                                                                </SelectContent>
+                                                          </Select>
                                                      </TableCell>
                                                      {outputConfig.format === 'txt' && (
                                                         <>
@@ -1277,8 +1507,8 @@ export default function Home() {
                                                                  min="1"
                                                                  value={field.length ?? ''}
                                                                  onChange={(e) => handleOutputFieldChange(field.id, 'length', e.target.value)}
-                                                                 placeholder="Obrigatório"
-                                                                 className="w-full"
+                                                                 placeholder="Obrig."
+                                                                 className="w-full h-8 text-xs"
                                                                  required
                                                                  disabled={isProcessing}
                                                                  aria-label={`Tamanho do campo ${field.isStatic ? field.fieldName : (predefinedFields.find(pf => pf.id === field.mappedField)?.name ?? field.mappedField)}`}
@@ -1290,8 +1520,8 @@ export default function Home() {
                                                                 maxLength={1}
                                                                 value={field.paddingChar ?? ''}
                                                                 onChange={(e) => handleOutputFieldChange(field.id, 'paddingChar', e.target.value)}
-                                                                placeholder={field.isStatic ? ( /^\d+$/.test(field.staticValue) ? '0' : ' ' ) : (isNumericType(columnMappings.find(cm=>!field.isStatic && cm.mappedField === field.mappedField)?.dataType ?? null) ? '0' : ' ')} // Dynamic placeholder
-                                                                className="w-12 text-center"
+                                                                placeholder={field.isStatic ? ( /^-?\d+$/.test(field.staticValue) ? '0' : ' ' ) : (isNumericType(dataType) ? '0' : ' ')} // Dynamic placeholder
+                                                                className="w-10 text-center h-8 text-xs"
                                                                 disabled={isProcessing}
                                                                 aria-label={`Caractere de preenchimento do campo ${field.isStatic ? field.fieldName : (predefinedFields.find(pf => pf.id === field.mappedField)?.name ?? field.mappedField)}`}
                                                              />
@@ -1302,7 +1532,7 @@ export default function Home() {
                                                                  onValueChange={(value) => handleOutputFieldChange(field.id, 'paddingDirection', value)}
                                                                  disabled={isProcessing}
                                                                >
-                                                                  <SelectTrigger className="w-full">
+                                                                  <SelectTrigger className="w-full h-8 text-xs">
                                                                        <SelectValue />
                                                                    </SelectTrigger>
                                                                    <SelectContent>
@@ -1335,10 +1565,11 @@ export default function Home() {
                                                            </TooltipProvider>
                                                      </TableCell>
                                                  </TableRow>
-                                             ))}
+                                                 );
+                                            })}
                                              {outputConfig.fields.length === 0 && (
                                                  <TableRow>
-                                                     <TableCell colSpan={outputConfig.format === 'txt' ? 6 : 3} className="text-center text-muted-foreground py-4">
+                                                     <TableCell colSpan={outputConfig.format === 'txt' ? 7 : 4} className="text-center text-muted-foreground py-4">
                                                          Nenhum campo adicionado à saída. Use os botões abaixo.
                                                      </TableCell>
                                                  </TableRow>
@@ -1347,11 +1578,11 @@ export default function Home() {
                                      </Table>
                                   </div>
                                    <div className="flex gap-2 mt-2">
-                                      <Button onClick={addOutputField} variant="outline" disabled={isProcessing || columnMappings.filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && of.mappedField === m.mappedField)).length === 0}>
-                                          <Plus className="mr-2 h-4 w-4" /> Adicionar Campo Mapeado
+                                      <Button onClick={addOutputField} variant="outline" size="sm" disabled={isProcessing || columnMappings.filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && of.mappedField === m.mappedField)).length === 0}>
+                                          <Plus className="mr-2 h-4 w-4" /> Adicionar Mapeado
                                       </Button>
-                                      <Button onClick={openAddStaticFieldDialog} variant="outline" disabled={isProcessing}>
-                                          <Plus className="mr-2 h-4 w-4" /> Adicionar Campo Estático
+                                      <Button onClick={openAddStaticFieldDialog} variant="outline" size="sm" disabled={isProcessing}>
+                                          <Plus className="mr-2 h-4 w-4" /> Adicionar Estático
                                       </Button>
                                    </div>
                              </div>
@@ -1378,12 +1609,17 @@ export default function Home() {
                     <Card>
                          <CardHeader>
                              <CardTitle className="text-xl">Resultado da Conversão</CardTitle>
-                             <CardDescription>Pré-visualização do arquivo convertido ({outputConfig.format.toUpperCase()}). Verifique os dados antes de baixar.</CardDescription>
+                             <CardDescription>
+                                Pré-visualização do arquivo convertido ({outputConfig.format.toUpperCase()}, {outputEncoding}). Verifique antes de baixar.
+                             </CardDescription>
                          </CardHeader>
                          <CardContent>
                              <Textarea
                                  readOnly
-                                 value={convertedData}
+                                  // Attempt to decode buffer for display, fallback for plain string
+                                 value={convertedData instanceof Buffer
+                                          ? iconv.decode(convertedData, outputEncoding)
+                                          : convertedData}
                                  className="w-full h-64 font-mono text-xs bg-secondary/30 border rounded-md"
                                  placeholder="Resultado da conversão aparecerá aqui..."
                                  aria-label="Pré-visualização do arquivo convertido"
@@ -1409,8 +1645,9 @@ export default function Home() {
           </Tabs>
         </CardContent>
 
-        <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t">
-          © {new Date().getFullYear()} DataForge. Ferramenta de conversão de dados.
+        <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t flex justify-between items-center">
+           <span>© {new Date().getFullYear()} DataForge. Ferramenta de conversão de dados.</span>
+           <span className="font-mono text-accent">v{appVersion}</span> {/* Display Version */}
         </CardFooter>
       </Card>
 
@@ -1519,5 +1756,3 @@ async function extractTextFromPdf(data: ArrayBuffer): Promise<string> {
   console.warn("extractTextFromPdf is a placeholder and needs proper implementation.");
   return Promise.resolve("Texto extraído do PDF (placeholder)\nLinha 2 do PDF (placeholder)");
 }
-
-    
