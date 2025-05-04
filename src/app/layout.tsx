@@ -27,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR"> {/* Default language to Portuguese */}
+    <html lang="pt-BR" suppressHydrationWarning> {/* Default language to Portuguese & suppress warning */}
       {/* Apply Inter font variable */}
       <body className={`${inter.variable} font-sans antialiased`}>
         {children}
