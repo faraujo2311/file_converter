@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -127,24 +128,25 @@ const formatNumber = (value: string | number, decimals: number): string => {
 
 // Helper to remove mask based on type
 const removeMask = (value: string, dataType: DataType | null): string => {
-    if (!dataType) return value;
+    if (!dataType || value === null || value === undefined) return '';
+    const stringValue = String(value);
 
     switch (dataType) {
         case 'CPF':
         case 'CNPJ':
         case 'Inteiro':
         case 'Numérico':
-            return String(value).replace(/\D/g, ''); // Remove all non-digits
+            return stringValue.replace(/\D/g, ''); // Remove all non-digits
         case 'Contábil':
              // Remove currency symbols, thousands separators, keep decimal comma/dot and negative sign
              // Convert comma decimal separator to dot for consistent parsing
-             return String(value).replace(/[R$.]/g, '').replace(',', '.');
+             return stringValue.replace(/[R$. ]/g, '').replace(',', '.'); // Added space removal
         case 'RG':
-            return String(value).replace(/[.-]/g, ''); // Basic RG mask removal
+            return stringValue.replace(/[.-]/g, ''); // Basic RG mask removal
         case 'Data':
-            return String(value).replace(/\D/g, ''); // Remove slashes, dashes etc.
+            return stringValue.replace(/\D/g, ''); // Remove slashes, dashes etc.
         default:
-            return String(value);
+            return stringValue;
     }
 }
 
@@ -254,28 +256,46 @@ export default function Home() {
            const result: ExtractPdfTableOutput = await extractPdfTable({ pdfDataUri });
 
            if (result.error || !result.headers || result.rows.length === 0) {
-               throw new Error(`Falha na extração do PDF: ${result.error || 'Nenhuma tabela encontrada ou erro na IA.'}`);
-           }
-
-           extractedHeaders = result.headers;
-           // Convert rows to the expected object format { Header: Value }
-            extractedData = result.rows.map(row => {
-               const rowData: { [key: string]: any } = {};
-               if (Array.isArray(row)) {
-                    extractedHeaders.forEach((header, index) => {
-                        rowData[header] = row[index] ?? '';
-                    });
-               } else { // It's already an object
-                   extractedHeaders.forEach(header => {
-                      rowData[header] = row[header] ?? '';
+               toast({
+                 title: "Erro na Extração do PDF",
+                 description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
+                 variant: "destructive",
+               });
+               // Don't throw an error, allow user to potentially manually map if headers came through
+               if (!result.headers || result.headers.length === 0) {
+                    resetState(); // Reset fully if no headers at all
+                    return;
+               } else {
+                  // Proceed with headers but no data, warn user
+                   extractedHeaders = result.headers;
+                   extractedData = [];
+                   toast({
+                       title: "Aviso",
+                       description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
+                       variant: "default",
                    });
                }
-               return rowData;
-           });
+           } else {
+                extractedHeaders = result.headers;
+                // Convert rows to the expected object format { Header: Value }
+                 extractedData = result.rows.map(row => {
+                    const rowData: { [key: string]: any } = {};
+                    if (Array.isArray(row)) {
+                         extractedHeaders.forEach((header, index) => {
+                             rowData[header] = row[index] ?? '';
+                         });
+                    } else { // It's already an object
+                        extractedHeaders.forEach(header => {
+                           rowData[header] = row[header] ?? '';
+                        });
+                    }
+                    return rowData;
+                });
+           }
 
         }
 
-        if (extractedHeaders.length === 0) {
+        if (extractedHeaders.length === 0 && fileToProcess.type !== 'application/pdf') { // Don't throw for PDF if headers are missing but handled above
           throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
         }
 
@@ -283,17 +303,17 @@ export default function Home() {
         setFileData(extractedData);
         setColumnMappings(extractedHeaders.map(header => {
             const guessedField = guessPredefinedField(header);
-            const guessedType = guessDataType(header);
+            const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
             return {
                 originalHeader: header,
                 mappedField: guessedField,
                 dataType: guessedType,
                 length: null,
                 // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
-                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro'].includes(guessedType ?? ''),
+                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
             }
         }));
-        toast({ title: "Sucesso", description: "Arquivo processado. Verifique o mapeamento." });
+        toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
       };
       reader.onerror = () => {
         throw new Error("Falha ao ler o arquivo.");
@@ -347,7 +367,9 @@ export default function Home() {
           // Auto-set data type if mapping to specific types and not already set
             if (field === 'mappedField' && actualValue && !currentMapping.dataType) {
                  const predefined = predefinedFields.find(pf => pf.id === actualValue);
-                 const guessedType = predefined ? guessDataType(predefined.name) : null; // Guess type from predefined name
+                  // Guess type based on field name AND potentially first row data
+                  const sampleData = fileData.length > 0 ? fileData[0][currentMapping.originalHeader] : '';
+                 const guessedType = predefined ? guessDataType(predefined.name, sampleData) : guessDataType(currentMapping.originalHeader, sampleData);
                  if(guessedType) currentMapping.dataType = guessedType;
 
                  // Default mask removal for relevant types when field is mapped
@@ -373,11 +395,11 @@ export default function Home() {
           'regime': ['regime', 'tipo regime'],
           'situacao': ['situacao', 'status'],
           'categoria': ['categoria'],
-          'secretaria': ['secretaria', 'orgao', 'unidade'],
+          'secretaria': ['secretaria', 'orgao', 'unidade', 'orgao pagador'], // Added orgao pagador
           'setor': ['setor', 'departamento', 'lotacao'],
           'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
           'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
-          'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel'],
+          'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'], // Added margem disponivel
       };
 
       for (const fieldId in guesses) {
@@ -388,19 +410,40 @@ export default function Home() {
       return null; // No guess
   };
 
-  const guessDataType = (header: string): DataType | null => {
+ const guessDataType = (header: string, sampleData: any): DataType | null => {
       const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      if (lowerHeader.includes('cnpj')) return 'CNPJ'; // Guess CNPJ first
-      if (lowerHeader.includes('cpf')) return 'CPF';
-      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG can have letters
-      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data'; // Expanded date guess
-       if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Contábil';
-      if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || /^\d+$/.test(lowerHeader)) return 'Inteiro'; // Guess integer for purely digit headers or matricula
-      if (lowerHeader.includes('num') || lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico';
-      if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') ) return 'Texto';
-      if (/[a-zA-Z]/.test(lowerHeader)) return 'Alfanumérico'; // Default to alphanumeric if letters present
+      const stringSample = String(sampleData).trim();
 
-      return 'Alfanumérico'; // Default guess if unsure
+       // Priority based on header keywords
+      if (lowerHeader.includes('cnpj')) return 'CNPJ';
+      if (lowerHeader.includes('cpf')) return 'CPF';
+      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
+      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Contábil';
+       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num')) return 'Inteiro'; // Prioritize integer for codes/numbers in header
+      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG often has letters/symbols
+       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Could be float or int, but Numérico is safer default
+       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao')) return 'Texto'; // Broaden Text/Alphanumeric categories
+
+      // Guess based on sample data content if header wasn't decisive
+       if (stringSample) {
+            // Check for date-like patterns (needs refinement for robustness)
+            if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(stringSample) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(stringSample) || /^\d{6,8}$/.test(stringSample)) return 'Data';
+            // Check for CPF/CNPJ-like patterns (basic)
+            if (/^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/.test(stringSample)) return 'CPF';
+            if (/^\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}$/.test(stringSample)) return 'CNPJ';
+            // Check for currency/accounting patterns
+            if (/[R$]/.test(stringSample) || /[,.]\d{2}$/.test(stringSample) || /^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(stringSample) || /^-?\d+,\d+$/.test(stringSample) ) return 'Contábil';
+             // Check if purely integer
+            if (/^-?\d+$/.test(stringSample)) return 'Inteiro';
+             // Check if potentially numeric (allowing decimal point)
+            if (/^-?\d+(\.\d+)?$/.test(stringSample)) return 'Numérico';
+        }
+
+      // Default guess
+       if (/[a-zA-Z]/.test(lowerHeader) || (stringSample && /[a-zA-Z]/.test(stringSample))) return 'Alfanumérico';
+       if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header is just digits
+
+      return 'Alfanumérico'; // Ultimate fallback
   }
 
 
@@ -680,15 +723,15 @@ export default function Home() {
                     let baseField: Omit<OutputFieldConfig, 'id' | 'order'> & { mappedField: string } = {
                        isStatic: false,
                        mappedField: m.mappedField!,
-                       length: existingField?.length ?? ((dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? 10) : 10), // Prioritize existing, then mapping, then default
-                       paddingChar: existingField?.paddingChar ?? getDefaultPaddingChar({ isStatic: false, mappedField: m.mappedField!, id:'', order: 0 }, columnMappings),
-                       paddingDirection: existingField?.paddingDirection ?? getDefaultPaddingDirection({ isStatic: false, mappedField: m.mappedField!, id:'', order: 0 }, columnMappings),
+                       length: existingField?.length ?? ((dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? undefined) : undefined), // Prioritize existing, then mapping, then undefined
+                       paddingChar: existingField?.paddingChar ?? undefined, // Start undefined, set below based on format
+                       paddingDirection: existingField?.paddingDirection ?? undefined, // Start undefined, set below based on format
                        dateFormat: existingField?.dateFormat ?? (dataType === 'Data' ? 'YYYYMMDD' : undefined),
                     };
 
                    // Apply format-specific overrides
                    if (prevConfig.format === 'txt') {
-                       baseField.length = baseField.length ?? 10; // Ensure length for TXT
+                       baseField.length = baseField.length ?? 10; // Ensure length for TXT (default 10 if still undefined)
                        baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
                        baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
                    } else {
@@ -768,7 +811,7 @@ export default function Home() {
             const hasChanged = JSON.stringify(prevConfig.fields) !== JSON.stringify(reorderedFinalFields);
 
            if (hasChanged) {
-              console.log("Updating output config fields:", reorderedFinalFields);
+               // console.log("Updating output config fields:", reorderedFinalFields); // Keep for debugging if needed
                return {
                    ...prevConfig,
                    fields: reorderedFinalFields
@@ -801,7 +844,7 @@ export default function Home() {
         setIsProcessing(false);
         return;
     }
-     if (outputConfig.format === 'txt' && outputConfig.fields.some(f => !f.length || f.length <= 0)) {
+     if (outputConfig.format === 'txt' && outputConfig.fields.some(f => (f.length === undefined || f.length === null || f.length <= 0) )) {
         toast({ title: "Erro", description: "Defina um 'Tamanho' válido (> 0) para todos os campos na saída TXT.", variant: "destructive" });
         setIsProcessing(false);
         return;
@@ -852,7 +895,7 @@ export default function Home() {
                  dataType = mapping.dataType; // Get data type from mapping
 
                  // Apply mask removal if configured
-                  if (mapping.removeMask && dataType) {
+                  if (mapping.removeMask && dataType && value) { // Check if value is truthy before removing mask
                       value = removeMask(value, dataType);
                   }
 
@@ -863,12 +906,14 @@ export default function Home() {
                       case 'CNPJ':
                       case 'Inteiro':
                            // Value should already be digits only if mask was removed
-                            if (!mapping.removeMask) value = value.replace(/\D/g, ''); // Ensure only digits if mask wasn't removed
+                            if (!mapping.removeMask && value) value = value.replace(/\D/g, ''); // Ensure only digits if mask wasn't removed
                            break;
                       case 'Numérico':
                            // Handle different numeric inputs (0, 130, 179.1, -350) -> format to "0.00", "130.00", "179.10", "-350.00"
-                            // Value after mask removal should be like "179.1" or "-350" or "0"
-                            const numMatch = value.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/); // Match number, allow leading/trailing dot, handle negative and starting with dot
+                            // Value after mask removal should be like "179.1" or "-350" or "0" or "-123.45"
+                            const numStr = value.replace(',', '.'); // Ensure dot as decimal sep
+                            const numMatch = numStr.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/); // Match number, allow leading/trailing dot, handle negative and starting with dot
+
                             if (numMatch && numMatch[0]) {
                                 let numVal = parseFloat(numMatch[0]);
                                 if (isNaN(numVal)) {
@@ -876,17 +921,19 @@ export default function Home() {
                                 } else {
                                     value = numVal.toFixed(2); // Format to 2 decimal places
                                 }
-                            } else if (value === '0') {
-                                value = '0.00'; // Explicitly handle "0"
+                            } else if (value === '0' || value === '') { // Handle empty string as 0.00 too
+                                value = '0.00'; // Explicitly handle "0" or empty
                             }
                              else {
+                                 console.warn(`Could not parse numeric value: ${originalValue} (processed: ${value}). Defaulting to 0.00`);
                                 value = '0.00'; // Default if no valid number found
                             }
                           break;
                       case 'Contábil':
                            // After mask removal, value might be "1234.56" or "-350.00" or just "500"
                            // Format as integer cents (e.g., 1234.56 -> 123456, -350.00 -> -35000)
-                            const accMatch = value.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/);
+                            const accStr = value.replace(',', '.'); // Ensure dot as decimal sep
+                            const accMatch = accStr.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/);
                             if (accMatch && accMatch[0]) {
                                 let accVal = parseFloat(accMatch[0]);
                                 if (isNaN(accVal)) {
@@ -894,83 +941,131 @@ export default function Home() {
                                 } else {
                                      value = Math.round(accVal * 100).toString();
                                 }
-                            } else if (value === '0') {
-                                value = '0'; // Explicitly handle "0"
+                            } else if (value === '0' || value === '') { // Handle empty string as 0 too
+                                value = '0'; // Explicitly handle "0" or empty
                             } else {
+                                console.warn(`Could not parse contábil value: ${originalValue} (processed: ${value}). Defaulting to 0.`);
                                 value = '0'; // Default
                             }
                           break;
-                      case 'Data':
-                          try {
-                              let parsedDate: Date | null = null;
-                              let cleanedValue = value; // Use value after potential mask removal
-                              // If mask wasn't removed, try to clean it now based on common patterns
-                               if (!mapping?.removeMask) {
-                                    cleanedValue = value.replace(/[^\d]/g, ''); // Basic cleaning
+                       case 'Data':
+                            try {
+                                let parsedDate: Date | null = null;
+                                let cleanedValue = value; // Use value after potential mask removal
+
+                                // If mask wasn't removed, try to clean common date separators
+                                if (!mapping?.removeMask && value) {
+                                    cleanedValue = value.replace(/[^\d]/g, ''); // Basic cleaning, remove non-digits
                                 }
 
-                              // Attempt parsing based on cleaned length and potential original format hints
-                              let year = '', month = '', day = '';
+                                // Attempt parsing based on cleaned length or common formats from original value
+                                let year = '', month = '', day = '';
 
-                              if (cleanedValue.length === 8) { // Assume YYYYMMDD or DDMMYYYY or MMDDYYYY from cleaned value
-                                    // Heuristic: If first 4 digits look like a reasonable year, assume YYYYMMDD
-                                    const potentialYear = parseInt(cleanedValue.substring(0, 4));
-                                    if (potentialYear > 1900 && potentialYear < 2100) {
-                                        year = cleanedValue.substring(0, 4);
-                                        month = cleanedValue.substring(4, 6);
-                                        day = cleanedValue.substring(6, 8);
-                                    } else { // Assume DDMMYYYY or MMDDYYYY - try DDMMYYYY first
-                                        day = cleanedValue.substring(0, 2);
-                                        month = cleanedValue.substring(2, 4);
-                                        year = cleanedValue.substring(4, 8);
+                                if (cleanedValue.length === 8) { // Assume YYYYMMDD, DDMMYYYY, or MMDDYYYY from cleaned value
+                                    const part1 = cleanedValue.substring(0, 2);
+                                    const part2 = cleanedValue.substring(2, 4);
+                                    const part3 = cleanedValue.substring(4, 8);
+                                    const part4 = cleanedValue.substring(0, 4);
+                                    const part5 = cleanedValue.substring(4, 6);
+                                    const part6 = cleanedValue.substring(6, 8);
+
+                                    // Check YYYYMMDD
+                                    if (parseInt(part4) > 1900 && parseInt(part4) < 2100 && parseInt(part5) >= 1 && parseInt(part5) <= 12 && parseInt(part6) >= 1 && parseInt(part6) <= 31) {
+                                        year = part4; month = part5; day = part6;
                                     }
-                              } else if (cleanedValue.length === 6) { // Assume YYMMDD or DDMMYY or MMDDYY
-                                  // Add heuristics if needed, e.g., assume DDMMYY
-                                    day = cleanedValue.substring(0, 2);
-                                    month = cleanedValue.substring(2, 4);
-                                    year = cleanedValue.substring(4, 6);
-                                    // Basic year completion - adjust century as needed
-                                    year = (parseInt(year) < 70 ? '20' : '19') + year;
-                              }
-                              // Add more parsing logic here if needed (e.g., for YYYY-MM-DD from original value)
+                                    // Check DDMMYYYY
+                                    else if (parseInt(part1) >= 1 && parseInt(part1) <= 31 && parseInt(part2) >= 1 && parseInt(part2) <= 12 && parseInt(part3) > 1900 && parseInt(part3) < 2100) {
+                                        day = part1; month = part2; year = part3;
+                                    }
+                                     // Check MMDDYYYY (less common in Brazil, but possible)
+                                     else if (parseInt(part1) >= 1 && parseInt(part1) <= 12 && parseInt(part2) >= 1 && parseInt(part2) <= 31 && parseInt(part3) > 1900 && parseInt(part3) < 2100) {
+                                          month = part1; day = part2; year = part3;
+                                     }
+                                } else if (cleanedValue.length === 6) { // Assume DDMMYY, YYMMDD, MMDDYY
+                                    const part1 = cleanedValue.substring(0, 2);
+                                    const part2 = cleanedValue.substring(2, 4);
+                                    const part3 = cleanedValue.substring(4, 6);
+                                     // Assume DDMMYY first
+                                     if(parseInt(part1) >= 1 && parseInt(part1) <= 31 && parseInt(part2) >= 1 && parseInt(part2) <= 12) {
+                                         day = part1; month = part2; year = part3;
+                                     }
+                                     // Could add more heuristics for YYMMDD etc. if needed
+                                      if (year.length === 2) {
+                                        year = (parseInt(year) < 70 ? '20' : '19') + year; // Basic year completion
+                                      }
+                                }
 
-                              if (year && month && day) {
-                                  parsedDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-                                  // Validate day and month against parsed date to catch invalid dates like 31/04
-                                  if (parsedDate && (parsedDate.getDate() !== parseInt(day) || parsedDate.getMonth() !== parseInt(month) - 1 || parsedDate.getFullYear() !== parseInt(year)) ) {
-                                       parsedDate = null; // Invalid date parsed
-                                  }
-                              }
+                                 // Try parsing original value with common separators if cleaned value didn't work well
+                                 if (!year && originalValue) {
+                                     const datePartsSlash = String(originalValue).split('/');
+                                     const datePartsDash = String(originalValue).split('-');
+
+                                     if (datePartsSlash.length === 3) {
+                                         if (datePartsSlash[2].length === 4) { // DD/MM/YYYY
+                                             day = datePartsSlash[0]; month = datePartsSlash[1]; year = datePartsSlash[2];
+                                         } else if (datePartsSlash[0].length === 4) { // YYYY/MM/DD
+                                             year = datePartsSlash[0]; month = datePartsSlash[1]; day = datePartsSlash[2];
+                                         } else if (datePartsSlash[2].length === 2) { // DD/MM/YY
+                                             day = datePartsSlash[0]; month = datePartsSlash[1]; year = datePartsSlash[2];
+                                              if(year.length === 2) year = (parseInt(year) < 70 ? '20' : '19') + year;
+                                         }
+                                     } else if (datePartsDash.length === 3) {
+                                         if (datePartsDash[0].length === 4) { // YYYY-MM-DD
+                                             year = datePartsDash[0]; month = datePartsDash[1]; day = datePartsDash[2];
+                                         } else if (datePartsDash[2].length === 4) { // DD-MM-YYYY
+                                             day = datePartsDash[0]; month = datePartsDash[1]; year = datePartsDash[2];
+                                         } else if (datePartsDash[2].length === 2) { // DD-MM-YY
+                                             day = datePartsDash[0]; month = datePartsDash[1]; year = datePartsDash[2];
+                                             if(year.length === 2) year = (parseInt(year) < 70 ? '20' : '19') + year;
+                                         }
+                                     }
+                                 }
 
 
-                              // Fallback to Date constructor if specific parsing failed
-                              if (!parsedDate || isNaN(parsedDate.getTime())) {
-                                  // Try parsing the original value directly before mask removal
-                                   let attemptOriginalParse = new Date(originalValue);
-                                   if(attemptOriginalParse && !isNaN(attemptOriginalParse.getTime())) {
-                                       parsedDate = attemptOriginalParse;
-                                   } else {
-                                        console.warn(`Could not parse date: ${originalValue} (cleaned: ${cleanedValue})`);
-                                        value = ''; // Set to empty if parsing fails
-                                   }
-                              }
+                                // Construct Date object if parts found
+                                if (year && month && day) {
+                                    // Pad day and month if necessary
+                                    const paddedMonth = month.padStart(2, '0');
+                                    const paddedDay = day.padStart(2, '0');
+                                    // Use UTC to avoid timezone issues if date is just YMD
+                                    parsedDate = new Date(`${year}-${paddedMonth}-${paddedDay}T00:00:00Z`);
+
+                                    // Validate parsed date parts against input parts to catch invalid dates like 31/04
+                                    if (parsedDate && (parsedDate.getUTCDate() !== parseInt(day) || (parsedDate.getUTCMonth() + 1) !== parseInt(month) || parsedDate.getUTCFullYear() !== parseInt(year)) ) {
+                                         parsedDate = null; // Invalid date resulted from parts
+                                    }
+                                }
+
+                                // Fallback: Try standard Date constructor on original value as last resort
+                                if (!parsedDate || isNaN(parsedDate.getTime())) {
+                                    let attemptOriginalParse = new Date(originalValue);
+                                    // Check if the fallback parse is valid and not the epoch date (often indicates failure)
+                                    if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getUTCFullYear() > 1900) {
+                                        parsedDate = attemptOriginalParse;
+                                    }
+                                }
 
 
-                              if (parsedDate && !isNaN(parsedDate.getTime())) {
-                                  const y = parsedDate.getFullYear();
-                                  const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
-                                  const d = String(parsedDate.getDate()).padStart(2, '0');
-                                  const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Use configured format
-                                  value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}{y}`;
-                              } else if (value !== '') { // Only warn if we failed and it wasn't already empty
-                                 console.warn(`Final attempt failed for date: ${originalValue}`);
-                                 value = ''; // Ensure empty if all parsing failed
-                              }
-                          } catch (e) {
-                                console.error(`Error parsing date: ${originalValue}`, e);
+                                // Format output if valid date found
+                                if (parsedDate && !isNaN(parsedDate.getTime())) {
+                                    const y = parsedDate.getUTCFullYear();
+                                    const m = String(parsedDate.getUTCMonth() + 1).padStart(2, '0');
+                                    const d = String(parsedDate.getUTCDate()).padStart(2, '0');
+                                    const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Use configured format
+
+                                    value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
+                                } else if (value) { // Only warn if we failed and it wasn't originally empty
+                                    console.warn(`Could not parse date: ${originalValue} (cleaned: ${cleanedValue}). Outputting empty.`);
+                                    value = ''; // Set to empty if all parsing fails
+                                } else {
+                                    value = ''; // Ensure empty if original value was also empty/null
+                                }
+
+                            } catch (e) {
+                                console.error(`Error processing date: ${originalValue}`, e);
                                 value = '';
-                          }
-                          break;
+                            }
+                            break;
                       case 'Alfanumérico':
                       case 'Texto':
                       default:
@@ -983,16 +1078,19 @@ export default function Home() {
 
           // --- Apply Output Formatting (TXT Padding or CSV Delimiting) ---
           if (outputConfig.format === 'txt') {
-             const len = outputField.length || 0;
-             const padChar = outputField.paddingChar || ' ';
-             const padDir = outputField.paddingDirection || 'right';
-             let processedValue = value; // Value already holds the formatted/cleaned data
+             const len = outputField.length ?? 0; // Default to 0 if somehow undefined
+             const padChar = outputField.paddingChar || getDefaultPaddingChar(outputField, columnMappings); // Use default if missing
+             const padDir = outputField.paddingDirection || getDefaultPaddingDirection(outputField, columnMappings); // Use default if missing
+             let processedValue = String(value ?? ''); // Ensure string, handle null/undefined as empty
 
               // Handle TXT padding/truncating for all types, including negative numbers
              if (len > 0) {
                  if (processedValue.length > len) {
-                     processedValue = processedValue.substring(processedValue.length - len); // Truncate (from left for numbers, usually?) - Check requirement
-                     // Or truncate from right: processedValue = processedValue.substring(0, len);
+                      console.warn(`Truncating value "${processedValue}" for field ${outputField.isStatic ? outputField.fieldName : outputField.mappedField} as it exceeds length ${len}`);
+                      // Truncate based on padding direction (or a sensible default)
+                      // Usually, text truncates from right, numbers from left? Needs clarification.
+                      // Defaulting to truncating from the right for simplicity.
+                      processedValue = processedValue.substring(0, len);
                  } else if (processedValue.length < len) {
                      const padLen = len - processedValue.length;
                      if (padDir === 'left') {
@@ -1001,13 +1099,9 @@ export default function Home() {
                          processedValue = processedValue + padChar.repeat(padLen);
                      }
                  }
-                  // Special case for negative numbers needing padding: ensure sign is handled correctly.
-                 // The standard padding above might work if negative sign is included in `processedValue`.
-                 // Example: value="-350.00", len=10, padChar='0', padDir='left' -> "0-350.00" (length 8 needs 2 zeros) -> "00-350.00"
-                 // Let's test this assumption. If value = '-35000' (Contabil), len=10, padChar='0', padDir='left'
-                 // padLen = 10 - 6 = 4. result = '0000' + '-35000' = "0000-35000". This seems correct.
+                 // The standard padding should handle negative signs correctly as they are part of the string.
              } else {
-                 processedValue = ''; // If length is 0 or undefined, output empty string for positional
+                 processedValue = ''; // If length is 0, output empty string for positional
              }
 
 
@@ -1018,13 +1112,20 @@ export default function Home() {
               line += outputConfig.delimiter;
             }
              // Basic CSV escaping
-             let csvValue = value;
+             let csvValue = String(value ?? ''); // Ensure string
              // Handle numeric types that should use dot as decimal separator in CSV
-              if (dataType === 'Numérico' || dataType === 'Contábil') {
-                  // Value might be '1234.56' or '-35000'
-                  // If Contabil was integer cents, convert back for CSV? Assuming Contabil stays as cents integer.
-                   // If Numérico, it's already 'XXX.YY'
-                   // Check if delimiter needs escaping
+              if (dataType === 'Numérico') {
+                  // Value should already be 'XXX.YY' from processing step
+              } else if(dataType === 'Contábil') {
+                  // Value is likely integer cents 'XXXX'. Convert back to decimal for CSV?
+                   // Example: '12345' -> '123.45'
+                   // const cents = parseInt(csvValue, 10);
+                   // if (!isNaN(cents)) {
+                   //     csvValue = (cents / 100).toFixed(2);
+                   // } else {
+                   //     csvValue = '0.00';
+                   // }
+                   // OR keep as integer cents? Depends on requirement. Keeping as cents for now.
               }
 
              const needsQuotes = csvValue.includes(outputConfig.delimiter!) || csvValue.includes('"') || csvValue.includes('\n');
@@ -1066,7 +1167,7 @@ export default function Home() {
          // Create Blob from Buffer or string
          const blob = convertedData instanceof Buffer
              ? new Blob([convertedData], { type: mimeType })
-             : new Blob([convertedData], { type: mimeType }); // Fallback if it's somehow a string
+             : new Blob([String(convertedData)], { type: mimeType }); // Ensure string for Blob constructor
 
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -1128,7 +1229,7 @@ export default function Home() {
              onValueChange={(value) => handleOutputFieldChange(currentField.id, 'mappedField', value)}
              disabled={isProcessing}
          >
-             <SelectTrigger className="w-full">
+             <SelectTrigger className="w-full text-xs h-8">
                  <SelectValue placeholder="Selecione o Campo" />
              </SelectTrigger>
              <SelectContent>
@@ -1262,7 +1363,8 @@ export default function Home() {
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>Opcional. Define o tamanho máx.</p>
-                                                <p>Relevante p/ Alfanumérico/Texto na saída TXT.</p>
+                                                <p>Usado para definir o tamanho na saída TXT.</p>
+                                                <p>(Ignorado para tipos não-texto no mapeamento).</p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
@@ -1330,7 +1432,7 @@ export default function Home() {
                                        onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
                                        placeholder="Tam." // Shorter placeholder
                                        className="w-full text-xs h-8"
-                                        // Only enable for text types, regardless of output format (useful hint)
+                                        // Enable only if type allows length and TXT output might be used
                                        disabled={isProcessing || !mapping.dataType || !['Alfanumérico', 'Texto'].includes(mapping.dataType)}
                                      />
                                    </TableCell>
@@ -1556,7 +1658,7 @@ export default function Home() {
                                                            </TableHead>
                                                       </>
                                                   )}
-                                                  <TableHead className="w-[80px] text-right">Ações</TableHead>
+                                                  <TableHead className={`w-[80px] text-right ${outputConfig.format === 'csv' ? 'pl-20' : ''}`}>Ações</TableHead>
                                              </TableRow>
                                          </TableHeader>
                                          <TableBody>
@@ -1651,7 +1753,7 @@ export default function Home() {
                                                           </TableCell>
                                                         </>
                                                      )}
-                                                     <TableCell className="text-right">
+                                                      <TableCell className={`text-right ${outputConfig.format === 'csv' ? 'pl-20' : ''}`}>
                                                           <TooltipProvider>
                                                               <Tooltip>
                                                                   <TooltipTrigger asChild>
@@ -1878,3 +1980,4 @@ export default function Home() {
 //   console.warn("extractTextFromPdf is a placeholder and needs proper implementation.");
 //   return Promise.resolve("Texto extraído do PDF (placeholder)\nLinha 2 do PDF (placeholder)");
 // }
+
