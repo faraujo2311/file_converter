@@ -288,6 +288,71 @@ export default function Home() {
     }
   };
 
+   // --- Guessing Logic (Moved before processFile) ---
+   const guessPredefinedField = useCallback((header: string): string | null => {
+      const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // Normalize and remove accents
+      const guesses: { [key: string]: string[] } = {
+          'matricula': ['matricula', 'mat', 'registro', 'id func', 'cod func'],
+          'cpf': ['cpf', 'cadastro pessoa fisica'],
+          'rg': ['rg', 'identidade', 'registro geral'],
+          'nome': ['nome', 'nome completo', 'funcionario', 'colaborador', 'name', 'servidor'],
+          'email': ['email', 'e-mail', 'correio eletronico', 'contato'],
+          'cnpj': ['cnpj', 'cadastro nacional pessoa juridica'],
+          'regime': ['regime', 'tipo regime'],
+          'situacao': ['situacao', 'status'],
+          'categoria': ['categoria'],
+          'secretaria': ['secretaria', 'orgao', 'unidade', 'orgao pagador'], // Added orgao pagador
+          'setor': ['setor', 'departamento', 'lotacao'],
+          'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
+          'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
+          'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'], // Added margem disponivel
+      };
+
+      for (const fieldId in guesses) {
+          if (guesses[fieldId].some(keyword => lowerHeader.includes(keyword))) {
+              return fieldId;
+          }
+      }
+      return null; // No guess
+  }, []); // Empty dependency array, this function doesn't depend on component state
+
+ const guessDataType = useCallback((header: string, sampleData: any): DataType | null => {
+      const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const stringSample = String(sampleData).trim();
+
+       // Priority based on header keywords
+      if (lowerHeader.includes('cnpj')) return 'CNPJ';
+      if (lowerHeader.includes('cpf')) return 'CPF';
+      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
+      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Contábil';
+       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num')) return 'Inteiro'; // Prioritize integer for codes/numbers in header
+      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG often has letters/symbols
+       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Could be float or int, but Numérico is safer default
+       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao')) return 'Texto'; // Broaden Text/Alphanumeric categories
+
+      // Guess based on sample data content if header wasn't decisive
+       if (stringSample) {
+            // Check for date-like patterns (needs refinement for robustness)
+            if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(stringSample) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(stringSample) || /^\d{6,8}$/.test(stringSample)) return 'Data';
+            // Check for CPF/CNPJ-like patterns (basic)
+            if (/^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/.test(stringSample)) return 'CPF';
+            if (/^\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}$/.test(stringSample)) return 'CNPJ';
+            // Check for currency/accounting patterns
+            if (/[R$]/.test(stringSample) || /[,.]\d{2}$/.test(stringSample) || /^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(stringSample) || /^-?\d+,\d+$/.test(stringSample) ) return 'Contábil';
+             // Check if purely integer
+            if (/^-?\d+$/.test(stringSample)) return 'Inteiro';
+             // Check if potentially numeric (allowing decimal point)
+            if (/^-?\d+(\.\d+)?$/.test(stringSample)) return 'Numérico';
+        }
+
+      // Default guess
+       if (/[a-zA-Z]/.test(lowerHeader) || (stringSample && /[a-zA-Z]/.test(stringSample))) return 'Alfanumérico';
+       if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header is just digits
+
+      return 'Alfanumérico'; // Ultimate fallback
+  }, []); // Empty dependency array
+
+
  const processFile = useCallback(async (fileToProcess: File) => {
      if (!fileToProcess) return; // Guard against null file
      setIsProcessing(true);
@@ -330,7 +395,7 @@ export default function Home() {
 
              const pdfReader = new FileReader();
              pdfReader.onload = async (e) => {
-                 const pdfDataUri = e.target?.result as string;
+                 const pdfDataUri = e.target?.result as string; // Assert type to string
                  if (!pdfDataUri) {
                       toast({ title: "Erro", description: "Falha ao ler o arquivo PDF.", variant: "destructive" });
                       setIsProcessing(false); // Ensure processing stops on read error
@@ -504,6 +569,8 @@ export default function Home() {
  }, [toast, guessPredefinedField, guessDataType]);
 
 
+
+
   // --- Mapping ---
   const handleMappingChange = (index: number, field: keyof ColumnMapping, value: any) => {
     setColumnMappings(prev => {
@@ -544,69 +611,6 @@ export default function Home() {
     });
   };
 
-
- const guessPredefinedField = useCallback((header: string): string | null => {
-      const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // Normalize and remove accents
-      const guesses: { [key: string]: string[] } = {
-          'matricula': ['matricula', 'mat', 'registro', 'id func', 'cod func'],
-          'cpf': ['cpf', 'cadastro pessoa fisica'],
-          'rg': ['rg', 'identidade', 'registro geral'],
-          'nome': ['nome', 'nome completo', 'funcionario', 'colaborador', 'name', 'servidor'],
-          'email': ['email', 'e-mail', 'correio eletronico', 'contato'],
-          'cnpj': ['cnpj', 'cadastro nacional pessoa juridica'],
-          'regime': ['regime', 'tipo regime'],
-          'situacao': ['situacao', 'status'],
-          'categoria': ['categoria'],
-          'secretaria': ['secretaria', 'orgao', 'unidade', 'orgao pagador'], // Added orgao pagador
-          'setor': ['setor', 'departamento', 'lotacao'],
-          'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
-          'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
-          'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'], // Added margem disponivel
-      };
-
-      for (const fieldId in guesses) {
-          if (guesses[fieldId].some(keyword => lowerHeader.includes(keyword))) {
-              return fieldId;
-          }
-      }
-      return null; // No guess
-  }, []); // Empty dependency array, this function doesn't depend on component state
-
- const guessDataType = useCallback((header: string, sampleData: any): DataType | null => {
-      const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const stringSample = String(sampleData).trim();
-
-       // Priority based on header keywords
-      if (lowerHeader.includes('cnpj')) return 'CNPJ';
-      if (lowerHeader.includes('cpf')) return 'CPF';
-      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
-      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Contábil';
-       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num')) return 'Inteiro'; // Prioritize integer for codes/numbers in header
-      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG often has letters/symbols
-       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Could be float or int, but Numérico is safer default
-       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao')) return 'Texto'; // Broaden Text/Alphanumeric categories
-
-      // Guess based on sample data content if header wasn't decisive
-       if (stringSample) {
-            // Check for date-like patterns (needs refinement for robustness)
-            if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(stringSample) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(stringSample) || /^\d{6,8}$/.test(stringSample)) return 'Data';
-            // Check for CPF/CNPJ-like patterns (basic)
-            if (/^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/.test(stringSample)) return 'CPF';
-            if (/^\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}$/.test(stringSample)) return 'CNPJ';
-            // Check for currency/accounting patterns
-            if (/[R$]/.test(stringSample) || /[,.]\d{2}$/.test(stringSample) || /^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(stringSample) || /^-?\d+,\d+$/.test(stringSample) ) return 'Contábil';
-             // Check if purely integer
-            if (/^-?\d+$/.test(stringSample)) return 'Inteiro';
-             // Check if potentially numeric (allowing decimal point)
-            if (/^-?\d+(\.\d+)?$/.test(stringSample)) return 'Numérico';
-        }
-
-      // Default guess
-       if (/[a-zA-Z]/.test(lowerHeader) || (stringSample && /[a-zA-Z]/.test(stringSample))) return 'Alfanumérico';
-       if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header is just digits
-
-      return 'Alfanumérico'; // Ultimate fallback
-  }, []); // Empty dependency array
 
 
   // --- Predefined Fields ---
@@ -1102,7 +1106,7 @@ export default function Home() {
                return prevConfig; // No change
            }
        });
-   }, [columnMappings, fileData, outputConfig.format]); // Rerun only when mappings, fileData or format change explicitly
+   }, [columnMappings, fileData, outputConfig.format, columnMappings]); // Rerun only when mappings, fileData or format change explicitly // Added columnMappings to dependency array
 
 
   // --- Conversion ---
@@ -1588,7 +1592,7 @@ export default function Home() {
                   {/* Add data-state to apply custom active style */}
                  <TabsTrigger value="upload" disabled={isProcessing} data-state={activeTab === 'upload' ? 'active' : 'inactive'}>1. Upload</TabsTrigger>
                  <TabsTrigger value="mapping" disabled={isProcessing || !file} data-state={activeTab === 'mapping' ? 'active' : 'inactive'}>2. Mapeamento</TabsTrigger>
-                 <TabsTrigger value="config" disabled={isProcessing || !file || headers.length === 0} data-state={activeTab === 'config' ? 'active' : 'inactive'}>3. Configurar Saída</TabsTrigger>
+                 <TabsTrigger value="config" disabled={isProcessing || !file } data-state={activeTab === 'config' ? 'active' : 'inactive'}>3. Configurar Saída</TabsTrigger> {/* Removed headers length check */}
                  <TabsTrigger value="result" disabled={isProcessing || !convertedData} data-state={activeTab === 'result' ? 'active' : 'inactive'}>4. Resultado</TabsTrigger>
              </TabsList>
 
@@ -1849,7 +1853,7 @@ export default function Home() {
                          </div>
                       </CardContent>
                        <CardFooter className="flex justify-end">
-                          <Button onClick={() => setActiveTab("config")} disabled={isProcessing || headers.length === 0 || columnMappings.length === 0} variant="default">
+                          <Button onClick={() => setActiveTab("config")} disabled={isProcessing || columnMappings.length === 0} variant="default">
                               Próximo: Configurar Saída <ArrowRight className="ml-2 h-4 w-4" />
                           </Button>
                        </CardFooter>
@@ -2349,7 +2353,7 @@ export default function Home() {
                                 <Checkbox
                                      id="predefined-persist"
                                      checked={predefinedFieldDialogState.persist}
-                                     onCheckedChange={(checked) => handlePredefinedFieldDialogChange('persist', checked)}
+                                     onCheckedChange={(checked) => handlePredefinedFieldDialogChange('persist', Boolean(checked))} // Ensure boolean
                                      aria-label="Manter campo para futuras conversões"
                                  />
                              </div>
