@@ -6,8 +6,8 @@ import { Toaster } from "@/components/ui/toaster" // Import Toaster
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' }); // Use Inter
 
 export const metadata: Metadata = {
-  title: 'DataForge', // Updated App Name
-  description: 'Converta arquivos Excel ou PDF para layouts definidos.', // Updated description
+  title: 'SCA - Sistema para conversão de arquivos', // Updated App Name
+  description: 'Converta arquivos Excel ou PDF(em teste) para layouts TXT ou CSV personalizados.', // Updated description
 };
 
 export default function RootLayout({
@@ -17,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR" suppressHydrationWarning> {/* Default language to Portuguese & suppress warning */}
-      {/* Apply Inter font variable inside body or head if needed, not directly in html */}
+      {/* Apply Inter font variable */}
       <body className={`${inter.variable} font-sans antialiased`}>
         {children}
         <Toaster /> {/* Add Toaster component here */}

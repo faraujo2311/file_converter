@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import iconv from 'iconv-lite'; // Import iconv-lite for encoding
 
@@ -12,16 +12,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2 } from 'lucide-react'; // Added Edit, Code, Loader2
+import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2, Save } from 'lucide-react'; // Added Edit, Code, Loader2, Save
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog"; // Import Dialog components
 import { extractPdfTable, type ExtractPdfTableOutput } from '@/ai/flows/extract-pdf-table-flow'; // Import the AI flow
+import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 
 // Define types
 type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Contábil' | 'Data' | 'Texto' | 'CPF' | 'CNPJ'; // Added CNPJ
-type PredefinedField = { id: string; name: string };
+type PredefinedField = { id: string; name: string; isCore?: boolean }; // Add isCore flag
 type ColumnMapping = {
   originalHeader: string;
   mappedField: string | null; // ID of predefined field or null
@@ -66,29 +67,39 @@ type StaticFieldDialogState = {
     paddingDirection: PaddingDirection;
 }
 
+// Predefined Field Dialog State
+type PredefinedFieldDialogState = {
+    isOpen: boolean;
+    isEditing: boolean;
+    fieldId?: string;
+    fieldName: string;
+    persist: boolean;
+}
 
-const PREDEFINED_FIELDS: PredefinedField[] = [
-  { id: 'matricula', name: 'Matrícula' },
-  { id: 'cpf', name: 'CPF' },
-  { id: 'rg', name: 'RG' },
-  { id: 'nome', name: 'Nome' },
-  { id: 'email', name: 'E-mail' },
-  { id: 'cnpj', name: 'CNPJ' }, // Added CNPJ to predefined if needed, or just use type
-  // Add fields from PDF example
-   { id: 'regime', name: 'Regime' },
-   { id: 'situacao', name: 'Situação' },
-   { id: 'categoria', name: 'Categoria' },
-   { id: 'secretaria', name: 'Secretaria' },
-   { id: 'setor', name: 'Setor' },
-   { id: 'margem_bruta', name: 'Margem Bruta' },
-   { id: 'margem_reservada', name: 'Margem Reservada' },
-   { id: 'margem_liquida', name: 'Margem Líquida' },
+
+const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
+  { id: 'matricula', name: 'Matrícula', isCore: true },
+  { id: 'cpf', name: 'CPF', isCore: true },
+  { id: 'rg', name: 'RG', isCore: true },
+  { id: 'nome', name: 'Nome', isCore: true },
+  { id: 'email', name: 'E-mail', isCore: true },
+  { id: 'cnpj', name: 'CNPJ', isCore: true },
+  { id: 'regime', name: 'Regime', isCore: true },
+  { id: 'situacao', name: 'Situação', isCore: true },
+  { id: 'categoria', name: 'Categoria', isCore: true },
+  { id: 'secretaria', name: 'Secretaria', isCore: true },
+  { id: 'setor', name: 'Setor', isCore: true },
+  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true },
+  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true },
+  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true },
 ];
 
 const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Contábil', 'Data', 'Texto', 'CPF', 'CNPJ']; // Added CNPJ
 const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252']; // Added encodings
 
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
+const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields'; // LocalStorage key
+
 
 // Helper to check if a data type is numeric-like
 const isNumericType = (dataType: DataType | null): boolean => {
@@ -157,7 +168,7 @@ export default function Home() {
   const [fileData, setFileData] = useState<any[]>([]);
   const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
   const [outputConfig, setOutputConfig] = useState<OutputConfig>({ format: 'txt', fields: [] });
-  const [predefinedFields, setPredefinedFields] = useState<PredefinedField[]>(PREDEFINED_FIELDS);
+  const [predefinedFields, setPredefinedFields] = useState<PredefinedField[]>([]); // Initialized in useEffect
   const [newFieldName, setNewFieldName] = useState<string>('');
   const [convertedData, setConvertedData] = useState<string | Buffer>(''); // Can be string or Buffer
   const [outputEncoding, setOutputEncoding] = useState<OutputEncoding>('UTF-8'); // State for encoding
@@ -174,8 +185,49 @@ export default function Home() {
         paddingChar: ' ',
         paddingDirection: 'right',
     });
+   const [predefinedFieldDialogState, setPredefinedFieldDialogState] = useState<PredefinedFieldDialogState>({
+       isOpen: false,
+       isEditing: false,
+       fieldName: '',
+       persist: false,
+   });
 
   const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'; // Get version
+
+   // Load predefined fields from localStorage on mount
+   useEffect(() => {
+       const storedFields = localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY);
+       let customFields: PredefinedField[] = [];
+       if (storedFields) {
+           try {
+               customFields = JSON.parse(storedFields).filter((f: any) => typeof f === 'object' && f.id && f.name && !f.isCore); // Ensure structure and filter out core
+           } catch (e) {
+               console.error("Failed to parse predefined fields from localStorage:", e);
+               localStorage.removeItem(PREDEFINED_FIELDS_STORAGE_KEY); // Clear invalid data
+           }
+       }
+       // Combine core fields with loaded custom fields, ensuring no duplicate IDs
+       const combined = [...CORE_PREDEFINED_FIELDS];
+       const coreIds = new Set(CORE_PREDEFINED_FIELDS.map(f => f.id));
+       customFields.forEach(cf => {
+           if (!coreIds.has(cf.id) && !combined.some(f => f.id === cf.id)) {
+               combined.push({ ...cf, isCore: false }); // Explicitly mark as not core
+           }
+       });
+
+       setPredefinedFields(combined);
+   }, []);
+
+   // Save custom predefined fields to localStorage when they change
+   const saveCustomPredefinedFields = useCallback((fieldsToSave: PredefinedField[]) => {
+       const customFields = fieldsToSave.filter(f => !f.isCore);
+       try {
+           localStorage.setItem(PREDEFINED_FIELDS_STORAGE_KEY, JSON.stringify(customFields));
+       } catch (e) {
+           console.error("Failed to save predefined fields to localStorage:", e);
+           toast({ title: "Erro", description: "Falha ao salvar campos pré-definidos personalizados.", variant: "destructive" });
+       }
+   }, [toast]);
 
    // Function to get sample data for preview
    const getSampleData = (): any[] => {
@@ -190,8 +242,7 @@ export default function Home() {
     setFileData([]);
     setColumnMappings([]);
     setOutputConfig({ format: 'txt', fields: [] });
-    // Don't reset predefined fields to keep custom additions? Or reset?
-    // setPredefinedFields(PREDEFINED_FIELDS); // Uncomment to reset custom fields
+    // Don't reset predefined fields (loaded from storage)
     setNewFieldName('');
     setConvertedData('');
     setOutputEncoding('UTF-8'); // Reset encoding
@@ -200,6 +251,7 @@ export default function Home() {
     setActiveTab("upload");
     setShowPreview(false);
      setStaticFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', staticValue: '', length: '', paddingChar: ' ', paddingDirection: 'right' });
+     setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false }); // Reset predefined dialog state
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if (fileInput) fileInput.value = '';
      toast({ title: "Pronto", description: "Formulário resetado para nova conversão." });
@@ -217,9 +269,14 @@ export default function Home() {
           description: "Tipo de arquivo inválido. Por favor, selecione um arquivo XLS, XLSX, ODS ou PDF.",
           variant: "destructive",
         });
-        resetState();
+        // Don't reset the entire state, just the file selection
+        setFile(null);
+        setFileName('');
+        const fileInput = event.target as HTMLInputElement;
+        if(fileInput) fileInput.value = '';
         return;
       }
+      // Reset relevant parts of state *before* processing new file
       setFile(selectedFile);
       setFileName(selectedFile.name);
       setHeaders([]);
@@ -227,176 +284,224 @@ export default function Home() {
       setColumnMappings([]);
       setConvertedData('');
       setActiveTab("mapping"); // Move to mapping tab after file select
-      processFile(selectedFile);
+      processFile(selectedFile); // Process the new file
     }
   };
 
-  const processFile = useCallback(async (fileToProcess: File) => {
-    setIsProcessing(true);
-    setProcessingMessage('Lendo arquivo...');
-    let extractedHeaders: string[] = [];
-    let extractedData: any[] = [];
+ const processFile = useCallback(async (fileToProcess: File) => {
+     if (!fileToProcess) return; // Guard against null file
+     setIsProcessing(true);
+     setProcessingMessage('Lendo arquivo...');
+     // Clear previous data related to file content immediately
+     setHeaders([]);
+     setFileData([]);
+     setColumnMappings([]);
+     setConvertedData('');
 
-    try {
-      if (fileToProcess.type.includes('spreadsheet') || fileToProcess.type.includes('excel') || fileToProcess.name.endsWith('.ods')) {
-        setProcessingMessage('Processando planilha...');
-        const data = await fileToProcess.arrayBuffer();
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' });
+     let extractedHeaders: string[] = [];
+     let extractedData: any[] = [];
 
-        if (jsonData.length > 0) {
-           extractedHeaders = jsonData[0].map(String);
-           extractedData = jsonData.slice(1).map(row => {
-             const rowData: { [key: string]: any } = {};
-             extractedHeaders.forEach((header, index) => {
-               rowData[header] = row[index] ?? '';
-             });
-             return rowData;
-           });
-        }
-      } else if (fileToProcess.type === 'application/pdf') {
-        setProcessingMessage('Extraindo dados do PDF via IA (pode levar um momento)...');
-        toast({
-          title: "Aviso",
-          description: "A extração de PDF usa IA e pode levar mais tempo. A precisão depende do layout do PDF.",
-          variant: "default",
-        });
+     try {
+         if (fileToProcess.type.includes('spreadsheet') || fileToProcess.type.includes('excel') || fileToProcess.name.endsWith('.ods')) {
+             setProcessingMessage('Processando planilha...');
+             const data = await fileToProcess.arrayBuffer();
+             const workbook = XLSX.read(data, { type: 'array' });
+             const sheetName = workbook.SheetNames[0];
+             const worksheet = workbook.Sheets[sheetName];
+             const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: '' });
 
-         const pdfReader = new FileReader();
-         pdfReader.onload = async (e) => {
-            const pdfDataUri = e.target?.result as string;
-            if (!pdfDataUri) {
-                throw new Error("Falha ao ler o arquivo PDF.");
-            }
-
-            try {
-                 const result: ExtractPdfTableOutput = await extractPdfTable({ pdfDataUri });
-
-                 if (result.error || !result.headers || result.rows.length === 0) {
-                     toast({
-                       title: "Erro na Extração do PDF",
-                       description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
-                       variant: "destructive",
+             if (jsonData.length > 0) {
+                 extractedHeaders = jsonData[0].map(String);
+                 extractedData = jsonData.slice(1).map(row => {
+                     const rowData: { [key: string]: any } = {};
+                     extractedHeaders.forEach((header, index) => {
+                         rowData[header] = row[index] ?? '';
                      });
-                     if (!result.headers || result.headers.length === 0) {
-                          resetState(); // Full reset if no headers at all
-                          return;
-                     } else {
-                         extractedHeaders = result.headers;
-                         extractedData = [];
+                     return rowData;
+                 });
+             }
+         } else if (fileToProcess.type === 'application/pdf') {
+             setProcessingMessage('Extraindo dados do PDF via IA (pode levar um momento)...');
+             toast({
+                 title: "Aviso",
+                 description: "A extração de PDF usa IA e pode levar mais tempo. A precisão depende do layout do PDF.",
+                 variant: "default",
+             });
+
+             const pdfReader = new FileReader();
+             pdfReader.onload = async (e) => {
+                 const pdfDataUri = e.target?.result as string;
+                 if (!pdfDataUri) {
+                      toast({ title: "Erro", description: "Falha ao ler o arquivo PDF.", variant: "destructive" });
+                      setIsProcessing(false); // Ensure processing stops on read error
+                      setActiveTab("upload"); // Go back to upload
+                      return; // Stop execution
+                 }
+
+                 try {
+                     const result: ExtractPdfTableOutput = await extractPdfTable({ pdfDataUri });
+
+                     if (result.error || !result.headers || result.rows.length === 0) {
                          toast({
-                             title: "Aviso",
-                             description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
-                             variant: "default",
+                             title: "Erro na Extração do PDF",
+                             description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
+                             variant: "destructive",
                          });
-                     }
-                 } else {
-                      extractedHeaders = result.headers;
-                      extractedData = result.rows.map(row => {
-                          const rowData: { [key: string]: any } = {};
-                          if (Array.isArray(row)) {
-                               extractedHeaders.forEach((header, index) => {
-                                   rowData[header] = row[index] ?? '';
-                               });
-                          } else {
-                              extractedHeaders.forEach(header => {
-                                 rowData[header] = row[header] ?? '';
-                              });
-                          }
-                          return rowData;
-                      });
+                         if (!result.headers || result.headers.length === 0) {
+                            setActiveTab("upload"); // Go back if completely failed
+                            // Keep file name, but clear data
+                            setHeaders([]);
+                            setFileData([]);
+                            setColumnMappings([]);
+                         } else {
+                             // Headers found, but no rows
+                             extractedHeaders = result.headers;
+                             extractedData = [];
+                             toast({
+                                 title: "Aviso",
+                                 description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
+                                 variant: "default",
+                             });
+                              // Proceed with headers only
+                             setHeaders(extractedHeaders);
+                             setFileData(extractedData);
+                             setColumnMappings(extractedHeaders.map(header => {
+                                const guessedField = guessPredefinedField(header);
+                                const guessedType = guessDataType(header, ''); // No sample data
+                                return {
+                                    originalHeader: header,
+                                    mappedField: guessedField,
+                                    dataType: guessedType,
+                                    length: null,
+                                    removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
+                                };
+                             }));
+                             toast({ title: "Sucesso Parcial", description: `Cabeçalhos do PDF ${fileToProcess.name} processados. Nenhuma linha de dados retornada. Verifique o mapeamento.` });
+                             setActiveTab("mapping"); // Go to mapping even with no rows
+                         }
+                     } else {
+                         // Successful extraction
+                         extractedHeaders = result.headers;
+                         extractedData = result.rows.map(row => {
+                             const rowData: { [key: string]: any } = {};
+                             if (Array.isArray(row)) {
+                                 extractedHeaders.forEach((header, index) => {
+                                     rowData[header] = row[index] ?? '';
+                                 });
+                             } else {
+                                 extractedHeaders.forEach(header => {
+                                     rowData[header] = row[header] ?? '';
+                                 });
+                             }
+                             return rowData;
+                         });
+
+                         // Continue processing after PDF handling (inside onload)
+                         setHeaders(extractedHeaders);
+                         setFileData(extractedData);
+                         setColumnMappings(extractedHeaders.map(header => {
+                            const guessedField = guessPredefinedField(header);
+                            const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
+                            return {
+                                originalHeader: header,
+                                mappedField: guessedField,
+                                dataType: guessedType,
+                                length: null,
+                                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
+                            }
+                         }));
+                         toast({ title: "Sucesso", description: `Arquivo PDF ${fileToProcess.name} processado. Verifique o mapeamento.` });
+                         setActiveTab("mapping"); // Ensure moving to mapping tab
+
+                     } // End successful PDF extraction else
+
+                 } catch (pdfError: any) {
+                     console.error("Erro ao processar PDF via IA:", pdfError);
+                     toast({
+                         title: "Erro ao Processar PDF",
+                         description: pdfError.message || "Ocorreu um erro inesperado durante a extração do PDF.",
+                         variant: "destructive",
+                     });
+                      setActiveTab("upload"); // Go back to upload on error
+                      // Keep file name, but clear data
+                      setHeaders([]);
+                      setFileData([]);
+                      setColumnMappings([]);
+                 } finally {
+                     setIsProcessing(false);
+                     setProcessingMessage('Processando...');
                  }
-
-                 // Continue processing after PDF handling (inside onload)
-                  if (extractedHeaders.length === 0) {
-                     throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
-                 }
-
-                 setHeaders(extractedHeaders);
-                 setFileData(extractedData);
-                  setColumnMappings(extractedHeaders.map(header => {
-                      const guessedField = guessPredefinedField(header);
-                      const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
-                      return {
-                          originalHeader: header,
-                          mappedField: guessedField,
-                          dataType: guessedType,
-                          length: null,
-                          removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
-                      }
-                 }));
-                  toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
-
-            } catch (pdfError: any) {
-                 console.error("Erro ao processar PDF via IA:", pdfError);
+             };
+             pdfReader.onerror = (error) => {
+                 console.error("Erro ao ler arquivo PDF:", error);
                  toast({
-                     title: "Erro ao Processar PDF",
-                     description: pdfError.message || "Ocorreu um erro inesperado durante a extração do PDF.",
+                     title: "Erro ao Ler Arquivo",
+                     description: "Não foi possível ler o arquivo PDF.",
                      variant: "destructive",
                  });
-                 resetState();
-            } finally {
-                setIsProcessing(false);
-                setProcessingMessage('Processando...');
-            }
-         };
-          pdfReader.onerror = (error) => {
-             console.error("Erro ao ler arquivo PDF:", error);
-             toast({
-                 title: "Erro ao Ler Arquivo",
-                 description: "Não foi possível ler o arquivo PDF.",
-                 variant: "destructive",
-             });
-             resetState();
-             setIsProcessing(false);
-          };
-         pdfReader.readAsDataURL(fileToProcess);
+                 setActiveTab("upload"); // Go back to upload
+                 // Keep file name, clear data
+                 setHeaders([]);
+                 setFileData([]);
+                 setColumnMappings([]);
+                 setIsProcessing(false); // Ensure processing stops
+             };
+             pdfReader.readAsDataURL(fileToProcess);
 
-         // Early return for PDF as processing continues in onload
-         return;
+             // Early return for PDF as processing continues in onload
+             return;
 
-      } else {
-           throw new Error("Tipo de arquivo não suportado para processamento.");
-      }
+         } else {
+             throw new Error("Tipo de arquivo não suportado para processamento.");
+         }
 
-      if (extractedHeaders.length === 0) {
-        throw new Error("Não foi possível extrair cabeçalhos do arquivo.");
-      }
-
-      setHeaders(extractedHeaders);
-      setFileData(extractedData);
-      setColumnMappings(extractedHeaders.map(header => {
-          const guessedField = guessPredefinedField(header);
-          const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
-          return {
-              originalHeader: header,
-              mappedField: guessedField,
-              dataType: guessedType,
-              length: null,
-              // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
-              removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
+         // --- Common processing logic for non-PDF ---
+         if (extractedHeaders.length === 0 && extractedData.length > 0) {
+             // If no headers but data exists, generate default headers
+             extractedHeaders = Object.keys(extractedData[0]).map((_, i) => `Coluna ${i + 1}`);
+             toast({ title: "Aviso", description: "Cabeçalhos não encontrados, usando 'Coluna 1', 'Coluna 2', etc.", variant: "default" });
+         } else if (extractedHeaders.length === 0) {
+              throw new Error("Não foi possível extrair cabeçalhos ou dados do arquivo.");
           }
-      }));
-      toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
 
-    } catch (error: any) {
-      console.error("Erro ao processar arquivo:", error);
-      toast({
-        title: "Erro ao Processar Arquivo",
-        description: error.message || "Ocorreu um erro inesperado.",
-        variant: "destructive",
-      });
-      resetState();
-    } finally {
-      // Only set processing to false here for non-PDF files
-       if (!fileToProcess.type.includes('pdf')) {
-         setIsProcessing(false);
-         setProcessingMessage('Processando...'); // Reset message
-       }
-    }
-  }, [toast, resetState]); // Added resetState to dependencies
+
+         setHeaders(extractedHeaders);
+         setFileData(extractedData);
+         setColumnMappings(extractedHeaders.map(header => {
+             const guessedField = guessPredefinedField(header);
+             const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : ''); // Pass sample data for better guessing
+             return {
+                 originalHeader: header,
+                 mappedField: guessedField,
+                 dataType: guessedType,
+                 length: null,
+                 // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
+                 removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
+             }
+         }));
+         toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
+         setActiveTab("mapping"); // Ensure move to mapping
+
+     } catch (error: any) {
+         console.error("Erro ao processar arquivo:", error);
+         toast({
+             title: "Erro ao Processar Arquivo",
+             description: error.message || "Ocorreu um erro inesperado.",
+             variant: "destructive",
+         });
+         setActiveTab("upload"); // Go back to upload on error
+         // Keep file name, clear data
+         setHeaders([]);
+         setFileData([]);
+         setColumnMappings([]);
+     } finally {
+         // Only set processing to false here for non-PDF files
+         if (!fileToProcess?.type.includes('pdf')) {
+             setIsProcessing(false);
+             setProcessingMessage('Processando...'); // Reset message
+         }
+     }
+ }, [toast, guessPredefinedField, guessDataType]);
 
 
   // --- Mapping ---
@@ -440,7 +545,7 @@ export default function Home() {
   };
 
 
-  const guessPredefinedField = (header: string): string | null => {
+ const guessPredefinedField = useCallback((header: string): string | null => {
       const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // Normalize and remove accents
       const guesses: { [key: string]: string[] } = {
           'matricula': ['matricula', 'mat', 'registro', 'id func', 'cod func'],
@@ -465,9 +570,9 @@ export default function Home() {
           }
       }
       return null; // No guess
-  };
+  }, []); // Empty dependency array, this function doesn't depend on component state
 
- const guessDataType = (header: string, sampleData: any): DataType | null => {
+ const guessDataType = useCallback((header: string, sampleData: any): DataType | null => {
       const lowerHeader = header.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const stringSample = String(sampleData).trim();
 
@@ -501,39 +606,120 @@ export default function Home() {
        if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header is just digits
 
       return 'Alfanumérico'; // Ultimate fallback
-  }
+  }, []); // Empty dependency array
 
 
   // --- Predefined Fields ---
-  const addPredefinedField = () => {
-    if (newFieldName.trim() === '') {
-      toast({ title: "Erro", description: "Nome do campo não pode ser vazio.", variant: "destructive" });
-      return;
-    }
-    const newId = newFieldName.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''); // Sanitize ID
-    if (!newId) {
-        toast({ title: "Erro", description: "Nome do campo inválido para gerar um ID.", variant: "destructive" });
-        return;
-    }
-    if (predefinedFields.some(f => f.id === newId)) {
-      toast({ title: "Erro", description: `Já existe um campo com o ID gerado "${newId}". Escolha um nome diferente.`, variant: "destructive" });
-      return;
-    }
-    setPredefinedFields([...predefinedFields, { id: newId, name: newFieldName.trim() }]);
-    setNewFieldName('');
-    toast({ title: "Sucesso", description: `Campo "${newFieldName.trim()}" adicionado com ID "${newId}".` });
-  };
+   const openAddPredefinedFieldDialog = () => {
+        setPredefinedFieldDialogState({
+            isOpen: true,
+            isEditing: false,
+            fieldName: '',
+            persist: false, // Default to not persisting
+        });
+    };
+
+    const openEditPredefinedFieldDialog = (field: PredefinedField) => {
+        setPredefinedFieldDialogState({
+            isOpen: true,
+            isEditing: true,
+            fieldId: field.id,
+            fieldName: field.name,
+            persist: !field.isCore, // Can only persist/unpersist custom fields
+        });
+    };
+
+    const handlePredefinedFieldDialogChange = (field: keyof PredefinedFieldDialogState, value: any) => {
+         setPredefinedFieldDialogState(prev => ({
+             ...prev,
+             [field]: value
+         }));
+     };
+
+   const savePredefinedField = () => {
+        const { isEditing, fieldId, fieldName, persist } = predefinedFieldDialogState;
+        const trimmedName = fieldName.trim();
+
+        if (!trimmedName) {
+            toast({ title: "Erro", description: "Nome do campo não pode ser vazio.", variant: "destructive" });
+            return;
+        }
+
+         const newId = isEditing ? fieldId! : trimmedName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+
+          if (!newId) {
+             toast({ title: "Erro", description: "Nome do campo inválido para gerar um ID.", variant: "destructive" });
+             return;
+         }
+
+         // Check for ID collision (only for new fields)
+         if (!isEditing && predefinedFields.some(f => f.id === newId)) {
+             toast({ title: "Erro", description: `Já existe um campo com o ID gerado "${newId}". Escolha um nome diferente.`, variant: "destructive" });
+             return;
+         }
+         // Check for Name collision (for new and edits, ignoring self)
+          if (predefinedFields.some(f => f.name.toLowerCase() === trimmedName.toLowerCase() && f.id !== fieldId)) {
+              toast({ title: "Erro", description: `Já existe um campo com o nome "${trimmedName}". Escolha um nome diferente.`, variant: "destructive" });
+              return;
+          }
+
+          let updatedFields;
+          let fieldDescription = `Campo "${trimmedName}"`;
+
+          if (isEditing) {
+              const originalField = predefinedFields.find(f => f.id === fieldId);
+              // Cannot change core fields to non-persistent or vice-versa
+               const canChangePersistence = !originalField?.isCore;
+
+              updatedFields = predefinedFields.map(f =>
+                  f.id === fieldId
+                      ? { ...f, name: trimmedName, isCore: originalField?.isCore ?? false } // Retain isCore status
+                      : f
+              );
+              fieldDescription += ' atualizado.';
+
+              if (canChangePersistence) {
+                   if (persist) {
+                       fieldDescription += ' Será mantido para futuras conversões.';
+                   } else {
+                       fieldDescription += ' Não será mantido para futuras conversões.';
+                   }
+               }
+
+          } else {
+              const newField: PredefinedField = { id: newId, name: trimmedName, isCore: false }; // New fields are never core
+              updatedFields = [...predefinedFields, newField];
+              fieldDescription += ` adicionado com ID "${newId}".`;
+               if (persist) {
+                   fieldDescription += ' Será mantido para futuras conversões.';
+               } else {
+                    fieldDescription += ' Não será mantido para futuras conversões.';
+               }
+          }
+
+        setPredefinedFields(updatedFields);
+        if (persist || (isEditing && !persist && !predefinedFields.find(f => f.id === fieldId)?.isCore)) {
+            // Save if persisting a new/edited field OR unpersisting a custom field
+            saveCustomPredefinedFields(updatedFields);
+        }
+
+        setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false }); // Close and reset dialog
+        toast({ title: "Sucesso", description: fieldDescription });
+    };
+
 
   const removePredefinedField = (idToRemove: string) => {
     const fieldToRemove = predefinedFields.find(f => f.id === idToRemove);
-     const coreFields = PREDEFINED_FIELDS.map(f => f.id); // Get initial core fields
-     if (fieldToRemove && coreFields.includes(idToRemove)) {
-         toast({ title: "Aviso", description: `Não é possível remover o campo pré-definido original "${fieldToRemove.name}".`, variant: "default" });
-         return;
-     }
-     if (!fieldToRemove) return;
+    if (!fieldToRemove) return;
 
-    setPredefinedFields(predefinedFields.filter(f => f.id !== idToRemove));
+    if (fieldToRemove.isCore) {
+      toast({ title: "Aviso", description: `Não é possível remover o campo pré-definido original "${fieldToRemove.name}".`, variant: "default" });
+      return;
+    }
+
+     const updatedFields = predefinedFields.filter(f => f.id !== idToRemove);
+    setPredefinedFields(updatedFields);
+
     // Update mappings that used this field
     setColumnMappings(prev => prev.map(m => m.mappedField === idToRemove ? { ...m, mappedField: null } : m));
     // Update output config (remove if it was a mapped field)
@@ -541,8 +727,13 @@ export default function Home() {
       ...prev,
       fields: prev.fields.filter(f => f.isStatic || f.mappedField !== idToRemove),
     }));
-    toast({ title: "Sucesso", description: `Campo "${fieldToRemove?.name}" removido.` });
+
+     // Update localStorage
+     saveCustomPredefinedFields(updatedFields);
+
+    toast({ title: "Sucesso", description: `Campo "${fieldToRemove.name}" removido.` });
   };
+
 
   // --- Output Configuration ---
    const handleOutputFormatChange = (value: OutputFormat) => {
@@ -795,8 +986,11 @@ export default function Home() {
     };
 
 
-  // Effect to initialize/update output fields based on mapped fields and format changes
+ // Effect to initialize/update output fields based on mapped fields and format changes
    useEffect(() => {
+       // Only run if mappings or file data exist
+       if (columnMappings.length === 0 && fileData.length === 0) return;
+
        setOutputConfig(prevConfig => {
            const existingFieldsMap = new Map(prevConfig.fields.map(f => [f.isStatic ? f.id : f.mappedField, f])); // Use mappedField or ID as key
 
@@ -908,7 +1102,7 @@ export default function Home() {
                return prevConfig; // No change
            }
        });
-   }, [columnMappings, outputConfig.format]); // Rerun only when mappings or format change explicitly
+   }, [columnMappings, fileData, outputConfig.format]); // Rerun only when mappings, fileData or format change explicitly
 
 
   // --- Conversion ---
@@ -917,8 +1111,8 @@ export default function Home() {
     setProcessingMessage('Convertendo arquivo...');
     setConvertedData(''); // Clear previous results
 
-    if (!fileData || fileData.length === 0 || outputConfig.fields.length === 0) {
-        toast({ title: "Erro", description: "Dados de entrada ou configuração de saída incompletos.", variant: "destructive" });
+    if (!fileData || outputConfig.fields.length === 0) { // Allow conversion even if fileData is empty (e.g., PDF headers only)
+        toast({ title: "Erro", description: "Configure os campos de saída antes de converter.", variant: "destructive" });
         setIsProcessing(false);
         return;
     }
@@ -959,7 +1153,10 @@ export default function Home() {
       let resultString = '';
       const sortedOutputFields = [...outputConfig.fields].sort((a, b) => a.order - b.order);
 
-      fileData.forEach(row => {
+      // Handle case where fileData might be empty (e.g., PDF headers only)
+      const dataToProcess = fileData.length > 0 ? fileData : [{}]; // Process at least once for static fields
+
+      dataToProcess.forEach(row => {
         let line = '';
         sortedOutputFields.forEach((outputField, fieldIndex) => {
           let value = '';
@@ -974,9 +1171,9 @@ export default function Home() {
              dataType = /^-?\d+([.,]\d+)?$/.test(value) ? 'Numérico' : 'Texto';
           } else {
              mapping = columnMappings.find(m => m.mappedField === outputField.mappedField);
-             if (!mapping || !mapping.originalHeader) {
-                 console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
-                 value = ''; // Default to empty string if mapping missing
+             if (!mapping || !mapping.originalHeader || fileData.length === 0) { // Check if fileData is empty too
+                 if(fileData.length > 0) console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
+                 value = ''; // Default to empty string if mapping missing or no data rows
              } else {
                  originalValue = row[mapping.originalHeader] ?? ''; // Get original value
                  value = String(originalValue).trim(); // Work with the string representation, trim
@@ -1085,8 +1282,9 @@ export default function Home() {
 
                                  // Try parsing original value with common separators if cleaned value didn't work well
                                  if (!year && originalValue) {
-                                     const datePartsSlash = String(originalValue).split('/');
-                                     const datePartsDash = String(originalValue).split('-');
+                                     const dateString = String(originalValue).trim();
+                                     const datePartsSlash = dateString.split('/');
+                                     const datePartsDash = dateString.split('-');
 
                                      if (datePartsSlash.length === 3) {
                                          if (datePartsSlash[2].length === 4) { // DD/MM/YYYY
@@ -1111,27 +1309,38 @@ export default function Home() {
 
 
                                 // Construct Date object if parts found
-                                if (year && month && day) {
-                                    // Pad day and month if necessary
+                                if (year && month && day && parseInt(year) > 0 && parseInt(month) >= 1 && parseInt(month) <= 12 && parseInt(day) >= 1 && parseInt(day) <= 31) {
+                                     // Basic validation passed, try constructing
                                     const paddedMonth = month.padStart(2, '0');
                                     const paddedDay = day.padStart(2, '0');
                                     // Use UTC to avoid timezone issues if date is just YMD
-                                    parsedDate = new Date(`${year}-${paddedMonth}-${paddedDay}T00:00:00Z`);
+                                    // Note: Month is 0-indexed in JS Date constructor
+                                    parsedDate = new Date(Date.UTC(parseInt(year), parseInt(paddedMonth) - 1, parseInt(paddedDay)));
 
-                                    // Validate parsed date parts against input parts to catch invalid dates like 31/04
-                                    if (parsedDate && (parsedDate.getUTCDate() !== parseInt(day) || (parsedDate.getUTCMonth() + 1) !== parseInt(month) || parsedDate.getUTCFullYear() !== parseInt(year)) ) {
+                                    // Validate parsed date parts against input parts to catch invalid dates like 31/04/2023
+                                     // Need to check UTC methods here
+                                    if (!parsedDate || isNaN(parsedDate.getTime()) || parsedDate.getUTCFullYear() !== parseInt(year) || (parsedDate.getUTCMonth() + 1) !== parseInt(paddedMonth) || parsedDate.getUTCDate() !== parseInt(paddedDay) ) {
                                          parsedDate = null; // Invalid date resulted from parts
+                                         if (year && month && day) console.warn(`Date validation failed for parts: D=${day}, M=${month}, Y=${year}`);
                                     }
+                                } else if (year || month || day) {
+                                     // If some parts were found but they were invalid (e.g., month 13)
+                                     console.warn(`Invalid date parts extracted: D=${day}, M=${month}, Y=${year}`);
                                 }
 
+
                                 // Fallback: Try standard Date constructor on original value as last resort
-                                if (!parsedDate || isNaN(parsedDate.getTime())) {
+                                if ((!parsedDate || isNaN(parsedDate.getTime())) && originalValue) {
                                      // Only attempt if originalValue looks somewhat like a date
-                                    if (originalValue && /[0-9]/.test(originalValue)) {
+                                    if (String(originalValue).trim() && /[0-9]/.test(String(originalValue))) {
                                         let attemptOriginalParse = new Date(originalValue);
                                         // Check if the fallback parse is valid and not the epoch date (often indicates failure)
-                                         if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getUTCFullYear() > 1900) {
-                                            parsedDate = attemptOriginalParse;
+                                         // Also check if year is reasonable
+                                         if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getFullYear() > 1000 && attemptOriginalParse.getFullYear() < 3000) {
+                                            parsedDate = attemptOriginalParse; // Use local time if parsed this way
+                                            console.log("Date parsed using fallback:", parsedDate);
+                                        } else {
+                                             console.warn(`Fallback date parsing failed or resulted in invalid date for: ${originalValue}`);
                                         }
                                     }
                                 }
@@ -1139,12 +1348,15 @@ export default function Home() {
 
                                 // Format output if valid date found
                                 if (parsedDate && !isNaN(parsedDate.getTime())) {
-                                    const y = parsedDate.getUTCFullYear();
-                                    const m = String(parsedDate.getUTCMonth() + 1).padStart(2, '0');
-                                    const d = String(parsedDate.getUTCDate()).padStart(2, '0');
+                                    // Use local date parts if parsed by fallback, otherwise UTC
+                                     const useUTC = parsedDate.getUTCHours() === 0 && parsedDate.getUTCMinutes() === 0; // Heuristic: check if it was likely built with UTC
+                                     const y = useUTC ? parsedDate.getUTCFullYear() : parsedDate.getFullYear();
+                                     const m = String((useUTC ? parsedDate.getUTCMonth() : parsedDate.getMonth()) + 1).padStart(2, '0');
+                                     const d = String(useUTC ? parsedDate.getUTCDate() : parsedDate.getDate()).padStart(2, '0');
+
                                     const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Use configured format
 
-                                    value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
+                                     value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
                                 } else if (value) { // Only warn if we failed and it wasn't originally empty
                                     console.warn(`Could not parse date: ${originalValue} (cleaned: ${cleanedValue}). Outputting empty.`);
                                     value = ''; // Set to empty if all parsing fails
@@ -1242,15 +1454,17 @@ export default function Home() {
              let csvValue = String(value ?? ''); // Ensure string
              // Handle numeric types that should use dot as decimal separator in CSV
               if (dataType === 'Numérico') {
-                  // Value should already be 'XXX.YY' from processing step
+                   // Value should already be 'XXX.YY' from processing step, replace dot with comma for Brazilian CSV standard?
+                   // csvValue = csvValue.replace('.', ','); // Optional: If comma is desired decimal separator in CSV
               } else if(dataType === 'Contábil') {
                   // Value is likely integer cents 'XXXX'. Convert back to decimal for CSV?
                    // Example: '12345' -> '123.45'
                    // const cents = parseInt(csvValue, 10);
                    // if (!isNaN(cents)) {
                    //     csvValue = (cents / 100).toFixed(2);
+                   //      // csvValue = csvValue.replace('.', ','); // Optional: comma separator
                    // } else {
-                   //     csvValue = '0.00';
+                   //     csvValue = '0.00'; // or '0,00'
                    // }
                    // OR keep as integer cents? Depends on requirement. Keeping as cents for now.
               }
@@ -1308,6 +1522,11 @@ export default function Home() {
         toast({ title: "Download Iniciado", description: `Arquivo ${outputFileName} sendo baixado.`});
     };
 
+  // Memoized list of predefined fields available for mapping dropdowns
+  const memoizedPredefinedFields = useMemo(() => {
+      return predefinedFields.sort((a, b) => a.name.localeCompare(b.name));
+  }, [predefinedFields]);
+
 
  // Render helper for Output Field selection for MAPPED fields
  const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig) => {
@@ -1315,7 +1534,7 @@ export default function Home() {
 
      const currentFieldMappedId = currentField.mappedField;
       // Options: Current field + fields mapped in input + not yet used in output
-     const availableOptions = predefinedFields
+     const availableOptions = memoizedPredefinedFields // Use memoized list
          .filter(pf =>
              columnMappings.some(cm => cm.mappedField === pf.id) // Must be mapped in input
          )
@@ -1356,38 +1575,45 @@ export default function Home() {
       <Card className="w-full max-w-5xl shadow-lg">
         <CardHeader className="text-center">
           <CardTitle className="text-3xl font-bold text-foreground">
-            <Columns className="inline-block mr-2 text-accent" /> DataForge
+            <Columns className="inline-block mr-2 text-accent" /> SCA - Sistema para conversão de arquivos
           </CardTitle>
           <CardDescription className="text-muted-foreground">
-            Converta seus arquivos Excel ou PDF para layouts TXT ou CSV personalizados.
+            Converta seus arquivos Excel ou PDF(em teste) para layouts TXT ou CSV personalizados.
           </CardDescription>
         </CardHeader>
 
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-4 mb-6">
-              <TabsTrigger value="upload" disabled={isProcessing}>1. Upload</TabsTrigger>
-              <TabsTrigger value="mapping" disabled={isProcessing || !file}>2. Mapeamento</TabsTrigger>
-              <TabsTrigger value="config" disabled={isProcessing || !file || headers.length === 0}>3. Configurar Saída</TabsTrigger>
-              <TabsTrigger value="result" disabled={isProcessing || !convertedData}>4. Resultado</TabsTrigger>
-            </TabsList>
+             <TabsList className="grid w-full grid-cols-4 mb-6">
+                  {/* Add data-state to apply custom active style */}
+                 <TabsTrigger value="upload" disabled={isProcessing} data-state={activeTab === 'upload' ? 'active' : 'inactive'}>1. Upload</TabsTrigger>
+                 <TabsTrigger value="mapping" disabled={isProcessing || !file} data-state={activeTab === 'mapping' ? 'active' : 'inactive'}>2. Mapeamento</TabsTrigger>
+                 <TabsTrigger value="config" disabled={isProcessing || !file || headers.length === 0} data-state={activeTab === 'config' ? 'active' : 'inactive'}>3. Configurar Saída</TabsTrigger>
+                 <TabsTrigger value="result" disabled={isProcessing || !convertedData} data-state={activeTab === 'result' ? 'active' : 'inactive'}>4. Resultado</TabsTrigger>
+             </TabsList>
 
             {/* 1. Upload Tab */}
             <TabsContent value="upload">
               <div className="flex flex-col items-center space-y-6 p-6 border rounded-lg bg-card">
-                <Label htmlFor="file-upload" className="text-lg font-semibold text-foreground flex items-center cursor-pointer hover:text-accent transition-colors">
-                  <Upload className="mr-2 h-6 w-6" />
-                  Selecione o Arquivo para Conversão
-                </Label>
-                <p className="text-sm text-muted-foreground">Formatos suportados: XLS, XLSX, ODS, PDF</p>
-                <Input
-                  id="file-upload"
-                  type="file"
-                  accept=".xls,.xlsx,.ods,.pdf"
-                  onChange={handleFileChange}
-                  className="block w-full max-w-md text-sm text-foreground file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
-                  disabled={isProcessing}
-                />
+                  <Label htmlFor="file-upload" className="text-lg font-semibold text-foreground cursor-pointer hover:text-accent transition-colors">
+                     <Button asChild variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground cursor-pointer">
+                          <span>
+                              <Upload className="mr-2 h-5 w-5 inline-block" />
+                               Selecione o Arquivo para Conversão
+                          </span>
+                     </Button>
+                     <Input
+                        id="file-upload"
+                        type="file"
+                        accept=".xls,.xlsx,.ods,.pdf"
+                        onChange={handleFileChange}
+                        className="hidden" // Hide the default input appearance
+                        disabled={isProcessing}
+                     />
+                 </Label>
+
+                <p className="text-sm text-muted-foreground">Formatos suportados: XLS, XLSX, ODS, PDF(em teste)</p>
+
                 {fileName && (
                   <div className="mt-4 text-center text-sm text-muted-foreground">
                     Arquivo selecionado: <span className="font-medium text-foreground">{fileName}</span>
@@ -1502,8 +1728,8 @@ export default function Home() {
                                          <SelectValue placeholder="Selecione ou deixe em branco" />
                                        </SelectTrigger>
                                        <SelectContent>
-                                         <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Não Mapear --</SelectItem>
-                                         {predefinedFields.map(field => (
+                                         <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
+                                         {memoizedPredefinedFields.map(field => ( // Use memoized list
                                            <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
                                          ))}
                                        </SelectContent>
@@ -1559,58 +1785,74 @@ export default function Home() {
                   <Card>
                      <CardHeader>
                          <CardTitle className="text-xl">Gerenciar Campos Pré-definidos</CardTitle>
-                         <CardDescription>Adicione ou remova campos personalizados para o mapeamento. O ID será gerado automaticamente.</CardDescription>
+                         <CardDescription>Adicione, edite ou remova campos personalizados para o mapeamento. Campos persistentes ficam salvos no navegador.</CardDescription>
                      </CardHeader>
-                     <CardContent>
-                        <div className="flex gap-2 mb-4">
-                            <Input
-                                type="text"
-                                placeholder="Nome do Novo Campo"
-                                value={newFieldName}
-                                onChange={(e) => setNewFieldName(e.target.value)}
-                                className="flex-grow"
-                                disabled={isProcessing}
-                            />
-                            <Button onClick={addPredefinedField} disabled={isProcessing || !newFieldName.trim()} variant="outline">
-                                <Plus className="mr-2 h-4 w-4" /> Adicionar
-                            </Button>
-                        </div>
-                        <div className="space-y-2 max-h-40 overflow-y-auto border rounded p-2 bg-secondary/30">
-                             {predefinedFields.sort((a, b) => a.name.localeCompare(b.name)).map(field => ( // Sort alphabetically
-                                <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0">
-                                    <span className="text-sm font-medium">{field.name} <span className="text-xs text-muted-foreground">({field.id})</span></span>
-                                     <TooltipProvider>
-                                        <Tooltip>
-                                             <TooltipTrigger asChild>
-                                                  <Button
-                                                      variant="ghost"
-                                                      size="icon"
-                                                      onClick={() => removePredefinedField(field.id)}
-                                                       disabled={isProcessing || PREDEFINED_FIELDS.some(pf => pf.id === field.id)} // Disable removal of original fields
-                                                      className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50 disabled:cursor-not-allowed"
-                                                      aria-label={`Remover campo ${field.name}`}
-                                                  >
-                                                      <Trash2 className="h-4 w-4" />
-                                                  </Button>
-                                             </TooltipTrigger>
-                                            <TooltipContent>
-                                                 {PREDEFINED_FIELDS.some(pf => pf.id === field.id)
-                                                     ? <p>Não é possível remover campos pré-definidos originais.</p>
-                                                     : <p>Remover campo "{field.name}"</p>
-                                                 }
-                                            </TooltipContent>
-                                        </Tooltip>
-                                     </TooltipProvider>
-                                </div>
-                            ))}
-                            {predefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo definido.</p>}
-                        </div>
-                     </CardContent>
-                      <CardFooter className="flex justify-end">
-                         <Button onClick={() => setActiveTab("config")} disabled={isProcessing || headers.length === 0} variant="default">
-                             Próximo: Configurar Saída <ArrowRight className="ml-2 h-4 w-4" />
-                         </Button>
-                      </CardFooter>
+                      <CardContent>
+                         <div className="flex justify-end mb-4">
+                             <Button onClick={openAddPredefinedFieldDialog} disabled={isProcessing} variant="outline">
+                                 <Plus className="mr-2 h-4 w-4" /> Adicionar Novo Campo
+                             </Button>
+                         </div>
+                         <div className="space-y-2 max-h-40 overflow-y-auto border rounded p-2 bg-secondary/30">
+                              {memoizedPredefinedFields.map(field => ( // Use memoized list
+                                 <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0">
+                                     <div>
+                                         <span className="text-sm font-medium">{field.name}</span>
+                                         <span className="text-xs text-muted-foreground ml-2">({field.id})</span>
+                                         {field.isCore && <span className="ml-2 text-xs text-blue-500">(Original)</span>}
+                                          {!field.isCore && localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY)?.includes(field.id) && <Save className="h-3 w-3 inline-block ml-2 text-green-600" title="Persistente" />}
+                                     </div>
+                                     <div className="flex gap-1">
+                                           <TooltipProvider>
+                                               <Tooltip>
+                                                   <TooltipTrigger asChild>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            onClick={() => openEditPredefinedFieldDialog(field)}
+                                                            disabled={isProcessing}
+                                                            className="h-7 w-7 text-muted-foreground hover:text-accent"
+                                                            aria-label={`Editar campo ${field.name}`}
+                                                        >
+                                                            <Edit className="h-4 w-4" />
+                                                        </Button>
+                                                   </TooltipTrigger>
+                                                   <TooltipContent><p>Editar "{field.name}"</p></TooltipContent>
+                                               </Tooltip>
+                                           </TooltipProvider>
+                                           <TooltipProvider>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                         <Button
+                                                             variant="ghost"
+                                                             size="icon"
+                                                             onClick={() => removePredefinedField(field.id)}
+                                                             disabled={isProcessing || field.isCore} // Disable removal of core fields
+                                                             className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50 disabled:cursor-not-allowed"
+                                                             aria-label={`Remover campo ${field.name}`}
+                                                         >
+                                                             <Trash2 className="h-4 w-4" />
+                                                         </Button>
+                                                    </TooltipTrigger>
+                                                   <TooltipContent>
+                                                        {field.isCore
+                                                            ? <p>Não é possível remover campos originais.</p>
+                                                            : <p>Remover campo "{field.name}"</p>
+                                                        }
+                                                   </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                       </div>
+                                 </div>
+                             ))}
+                             {memoizedPredefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo definido.</p>}
+                         </div>
+                      </CardContent>
+                       <CardFooter className="flex justify-end">
+                          <Button onClick={() => setActiveTab("config")} disabled={isProcessing || headers.length === 0 || columnMappings.length === 0} variant="default">
+                              Próximo: Configurar Saída <ArrowRight className="ml-2 h-4 w-4" />
+                          </Button>
+                       </CardFooter>
                   </Card>
                 </div>
               )}
@@ -1630,7 +1872,7 @@ export default function Home() {
                       {processingMessage}
                   </div>
                )}
-               {!isProcessing && file && headers.length > 0 && (
+               {!isProcessing && file && ( // Allow access even if headers.length === 0 for static fields
                  <div className="space-y-6">
                     <Card>
                         <CardHeader>
@@ -1719,7 +1961,7 @@ export default function Home() {
 
                              <div>
                                  <h3 className="text-lg font-medium mb-2">Campos de Saída</h3>
-                                  <p className="text-xs text-muted-foreground mb-2">Defina a ordem, conteúdo e formatação dos campos no arquivo final. Arraste para reordenar (funcionalidade futura).</p>
+                                  <p className="text-xs text-muted-foreground mb-2">Defina a ordem, conteúdo e formatação dos campos no arquivo final.</p>
                                  <div className="max-h-[45vh] overflow-auto border rounded-md">
                                      <Table>
                                          <TableHeader>
@@ -1918,7 +2160,7 @@ export default function Home() {
                     </Card>
                  </div>
                 )}
-                 {!isProcessing && (!file || headers.length === 0) && (
+                 {!isProcessing && !file && (
                     <p className="text-center text-muted-foreground p-4">Complete as etapas de Upload e Mapeamento primeiro.</p>
                 )}
             </TabsContent>
@@ -1972,7 +2214,7 @@ export default function Home() {
         </CardContent>
 
         <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t flex justify-between items-center">
-           <span>© {new Date().getFullYear()} DataForge. Ferramenta de conversão de dados.</span>
+           <span>© {new Date().getFullYear()} SCA. Ferramenta de conversão de dados.</span>
            <span className="font-mono text-accent">v{appVersion}</span> {/* Display Version */}
         </CardFooter>
       </Card>
@@ -2069,6 +2311,58 @@ export default function Home() {
                         <Button type="button" variant="outline">Cancelar</Button>
                     </DialogClose>
                     <Button type="button" onClick={saveStaticField}>Salvar Campo</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
+        {/* Add/Edit Predefined Field Dialog */}
+        <Dialog open={predefinedFieldDialogState.isOpen} onOpenChange={(isOpen) => setPredefinedFieldDialogState(prev => ({ ...prev, isOpen }))}>
+            <DialogContent className="sm:max-w-[425px]">
+                <DialogHeader>
+                    <DialogTitle>{predefinedFieldDialogState.isEditing ? 'Editar' : 'Adicionar'} Campo Pré-definido</DialogTitle>
+                    <DialogDescription>
+                        {predefinedFieldDialogState.isEditing
+                            ? "Edite o nome do campo personalizado."
+                            : "Adicione um novo campo para usar no mapeamento."}
+                         Campos originais não podem ser removidos ou ter persistência alterada.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="predefined-field-name" className="text-right">
+                            Nome
+                        </Label>
+                        <Input
+                            id="predefined-field-name"
+                            value={predefinedFieldDialogState.fieldName}
+                            onChange={(e) => handlePredefinedFieldDialogChange('fieldName', e.target.value)}
+                            className="col-span-3"
+                            placeholder="Ex: ID Cliente"
+                        />
+                    </div>
+                    {!predefinedFields.find(f => f.id === predefinedFieldDialogState.fieldId)?.isCore && ( // Only show for non-core fields
+                         <div className="grid grid-cols-4 items-center gap-4">
+                             <Label htmlFor="predefined-persist" className="text-right col-span-3">
+                                Manter para futuras conversões?
+                             </Label>
+                             <div className="col-span-1 flex items-center justify-start">
+                                <Checkbox
+                                     id="predefined-persist"
+                                     checked={predefinedFieldDialogState.persist}
+                                     onCheckedChange={(checked) => handlePredefinedFieldDialogChange('persist', checked)}
+                                     aria-label="Manter campo para futuras conversões"
+                                 />
+                             </div>
+                         </div>
+                    )}
+                </div>
+                <DialogFooter>
+                    <DialogClose asChild>
+                        <Button type="button" variant="outline">Cancelar</Button>
+                    </DialogClose>
+                    <Button type="button" onClick={savePredefinedField}>
+                         {predefinedFieldDialogState.isEditing ? 'Salvar Alterações' : 'Adicionar Campo'}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

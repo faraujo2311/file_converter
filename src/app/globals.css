@@ -90,3 +90,11 @@ body {
     font-feature-settings: "rlig" 1, "calt" 1; /* Enable ligatures */
   }
 }
+
+
+/* Add custom style for active TabsTrigger */
+@layer components {
+  .tabs-trigger-active {
+    @apply bg-accent text-accent-foreground shadow-sm; /* Use accent color for active tab */
+  }
+}
