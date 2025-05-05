@@ -714,10 +714,17 @@ export default function Home() {
 
               if (canChangePersistence) {
                    if (persist) {
+                       // If editing AND the field is now being persisted, add it to the list to save
+                       saveCustomPredefinedFields([...predefinedFields.filter(f => !f.isCore && f.id !== fieldId), updatedFields.find(f => f.id === fieldId)!]);
                        fieldDescription += ' Será mantido para futuras conversões.';
                    } else {
+                        // If editing AND the field is now NOT being persisted, remove it from the list to save
+                       saveCustomPredefinedFields(predefinedFields.filter(f => !f.isCore && f.id !== fieldId));
                        fieldDescription += ' Não será mantido para futuras conversões.';
                    }
+               } else {
+                   // For core fields, persistence cannot be changed, just save existing custom fields
+                   saveCustomPredefinedFields(predefinedFields.filter(f => !f.isCore));
                }
 
           } else {
@@ -725,20 +732,15 @@ export default function Home() {
               updatedFields = [...predefinedFields, newField];
               fieldDescription += ` adicionado com ID "${newId}".`;
                if (persist) {
+                    saveCustomPredefinedFields([...predefinedFields.filter(f => !f.isCore), newField]);
                    fieldDescription += ' Será mantido para futuras conversões.';
                } else {
+                    saveCustomPredefinedFields(predefinedFields.filter(f => !f.isCore)); // Save only existing custom fields if new one is not persisted
                     fieldDescription += ' Não será mantido para futuras conversões.';
                }
           }
 
         setPredefinedFields(updatedFields);
-
-        // Update localStorage based on persist flag
-        const fieldsToSave = updatedFields.filter(f => !f.isCore); // Get all custom fields
-        const currentlyPersisted = persist ? fieldsToSave : fieldsToSave.filter(f => f.id !== newId); // Filter out the current field if unpersisted
-        saveCustomPredefinedFields(currentlyPersisted);
-
-
         setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false, comment: '' }); // Close and reset dialog
         toast({ title: "Sucesso", description: fieldDescription });
     };
@@ -2291,11 +2293,7 @@ export default function Home() {
         </CardContent>
 
         <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t flex flex-col sm:flex-row justify-between items-center gap-2">
-            {/* Ads Placeholder */}
-             <div className="flex gap-4 justify-center w-full sm:w-auto">
-                 <div className="w-32 h-16 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-muted-foreground text-xs rounded">Ad Placeholder 1</div>
-                 <div className="w-32 h-16 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-muted-foreground text-xs rounded">Ad Placeholder 2</div>
-             </div>
+             {/* Removed Ad Placeholder Divs */}
              <div className="flex flex-col items-center sm:items-end">
                  <span>
                      © {new Date().getFullYear()} SCA. Ferramenta de conversão de dados. - Desenvolvido por <a href="mailto:faraujo@gmail.com" className="text-accent hover:underline">Fábio Araújo</a>
