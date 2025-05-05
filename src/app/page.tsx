@@ -21,8 +21,8 @@ import { extractPdfTable, type ExtractPdfTableOutput } from '@/ai/flows/extract-
 import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 
 // Define types
-type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Contábil' | 'Data' | 'Texto' | 'CPF' | 'CNPJ'; // Added CNPJ
-type PredefinedField = { id: string; name: string; isCore?: boolean }; // Add isCore flag
+type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Data' | 'CPF' | 'CNPJ'; // Removed 'Texto' and 'Contábil'
+type PredefinedField = { id: string; name: string; isCore?: boolean; comment?: string }; // Add comment field
 type ColumnMapping = {
   originalHeader: string;
   mappedField: string | null; // ID of predefined field or null
@@ -74,28 +74,29 @@ type PredefinedFieldDialogState = {
     fieldId?: string;
     fieldName: string;
     persist: boolean;
+    comment: string; // Add comment state
 }
 
 
 const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
-  { id: 'matricula', name: 'Matrícula', isCore: true },
-  { id: 'cpf', name: 'CPF', isCore: true },
-  { id: 'rg', name: 'RG', isCore: true },
-  { id: 'nome', name: 'Nome', isCore: true },
-  { id: 'email', name: 'E-mail', isCore: true },
-  { id: 'cnpj', name: 'CNPJ', isCore: true },
-  { id: 'regime', name: 'Regime', isCore: true },
-  { id: 'situacao', name: 'Situação', isCore: true },
-  { id: 'categoria', name: 'Categoria', isCore: true },
-  { id: 'secretaria', name: 'Secretaria', isCore: true },
-  { id: 'setor', name: 'Setor', isCore: true },
-  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true },
-  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true },
-  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true },
+  { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.' },
+  { id: 'cpf', name: 'CPF', isCore: true, comment: 'Cadastro de Pessoa Física. Será formatado sem máscara na saída se a opção estiver marcada.' },
+  { id: 'rg', name: 'RG', isCore: true, comment: 'Registro Geral (Identidade). Pode conter letras e números.' },
+  { id: 'nome', name: 'Nome', isCore: true, comment: 'Nome completo.' },
+  { id: 'email', name: 'E-mail', isCore: true, comment: 'Endereço de e-mail.' },
+  { id: 'cnpj', name: 'CNPJ', isCore: true, comment: 'Cadastro Nacional da Pessoa Jurídica. Será formatado sem máscara na saída se a opção estiver marcada.' },
+  { id: 'regime', name: 'Regime', isCore: true, comment: 'Regime de contratação (ex: CLT, Estatutário).' },
+  { id: 'situacao', name: 'Situação', isCore: true, comment: 'Situação funcional (ex: Ativo, Inativo).' },
+  { id: 'categoria', name: 'Categoria', isCore: true, comment: 'Categoria funcional.' },
+  { id: 'secretaria', name: 'Secretaria', isCore: true, comment: 'Secretaria ou órgão de lotação.' },
+  { id: 'setor', name: 'Setor', isCore: true, comment: 'Setor ou departamento específico.' },
+  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).' },
+  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).' },
+  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).' },
 ];
 
-const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Contábil', 'Data', 'Texto', 'CPF', 'CNPJ']; // Added CNPJ
-const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252']; // Added encodings
+const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Data', 'CPF', 'CNPJ']; // Removed 'Texto' and 'Contábil'
+const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252'];
 
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
 const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields'; // LocalStorage key
@@ -103,7 +104,8 @@ const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields'; // LocalStorage k
 
 // Helper to check if a data type is numeric-like
 const isNumericType = (dataType: DataType | null): boolean => {
-    return dataType === 'Inteiro' || dataType === 'Numérico' || dataType === 'Contábil' || dataType === 'CPF' || dataType === 'CNPJ';
+    // Updated to reflect removed types
+    return dataType === 'Inteiro' || dataType === 'Numérico' || dataType === 'CPF' || dataType === 'CNPJ';
 }
 
 // Helper to get default padding char based on type
@@ -113,6 +115,7 @@ const getDefaultPaddingChar = (field: OutputFieldConfig, mappings: ColumnMapping
         return /^-?\d+$/.test(field.staticValue) ? '0' : ' ';
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
+        // Updated to reflect removed types
         return isNumericType(mapping?.dataType ?? null) ? '0' : ' ';
     }
 }
@@ -124,13 +127,18 @@ const getDefaultPaddingDirection = (field: OutputFieldConfig, mappings: ColumnMa
         return /^-?\d+$/.test(field.staticValue) ? 'left' : 'right';
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
+        // Updated to reflect removed types
         return isNumericType(mapping?.dataType ?? null) ? 'left' : 'right';
     }
 }
 
 // Helper to format number to specified decimals (handles negatives)
+// This helper might need adjustment now that 'Contábil' is removed
 const formatNumber = (value: string | number, decimals: number): string => {
-    const num = Number(String(value).replace(/[^0-9.-]/g, '')); // Keep negative sign
+    // Remove common currency symbols and thousands separators for parsing
+    const cleanedValue = String(value).replace(/[R$., ]/g, (match) => match === '.' ? '.' : ''); // Keep only potential decimal dot
+    const num = Number(cleanedValue.replace(',', '.')); // Ensure dot for decimal parsing
+
     if (isNaN(num)) return '';
     return num.toFixed(decimals);
 }
@@ -146,19 +154,24 @@ const removeMaskHelper = (value: string, dataType: DataType | null): string => {
         case 'Inteiro':
         case 'Numérico':
             return stringValue.replace(/\D/g, ''); // Remove all non-digits
-        case 'Contábil':
-             // Remove currency symbols, thousands separators, keep decimal comma/dot and negative sign
-             // Convert comma decimal separator to dot for consistent parsing
-             return stringValue.replace(/[R$. ]/g, '').replace(',', '.'); // Added space removal
+        // Removed 'Contábil' case
         case 'RG':
-            return stringValue.replace(/[.-]/g, ''); // Basic RG mask removal
+            // RG can have letters, just remove common separators
+            return stringValue.replace(/[.-]/g, '');
         case 'Data':
             return stringValue.replace(/\D/g, ''); // Remove slashes, dashes etc.
+        case 'Alfanumérico': // Explicitly handle Alfanumérico (no change)
         default:
             return stringValue;
     }
 }
 
+// Download Dialog State
+type DownloadDialogState = {
+    isOpen: boolean;
+    proposedFilename: string;
+    finalFilename: string;
+}
 
 export default function Home() {
   const { toast } = useToast();
@@ -190,7 +203,13 @@ export default function Home() {
        isEditing: false,
        fieldName: '',
        persist: false,
+       comment: '', // Initialize comment state
    });
+    const [downloadDialogState, setDownloadDialogState] = useState<DownloadDialogState>({
+        isOpen: false,
+        proposedFilename: '',
+        finalFilename: '',
+    });
 
   const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'; // Get version
 
@@ -200,14 +219,17 @@ export default function Home() {
        let customFields: PredefinedField[] = [];
        if (storedFields) {
            try {
-               customFields = JSON.parse(storedFields).filter((f: any) => typeof f === 'object' && f.id && f.name && !f.isCore); // Ensure structure and filter out core
+                // Ensure comment is loaded or defaulted
+               customFields = JSON.parse(storedFields)
+                    .filter((f: any) => typeof f === 'object' && f.id && f.name && !f.isCore)
+                    .map((f: any) => ({ ...f, comment: f.comment || '' })); // Ensure comment exists
            } catch (e) {
                console.error("Failed to parse predefined fields from localStorage:", e);
                localStorage.removeItem(PREDEFINED_FIELDS_STORAGE_KEY); // Clear invalid data
            }
        }
        // Combine core fields with loaded custom fields, ensuring no duplicate IDs
-       const combined = [...CORE_PREDEFINED_FIELDS];
+       const combined = [...CORE_PREDEFINED_FIELDS.map(f => ({...f, comment: f.comment || ''}))]; // Ensure core fields have comment
        const coreIds = new Set(CORE_PREDEFINED_FIELDS.map(f => f.id));
        customFields.forEach(cf => {
            if (!coreIds.has(cf.id) && !combined.some(f => f.id === cf.id)) {
@@ -251,7 +273,8 @@ export default function Home() {
     setActiveTab("upload");
     setShowPreview(false);
      setStaticFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', staticValue: '', length: '', paddingChar: ' ', paddingDirection: 'right' });
-     setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false }); // Reset predefined dialog state
+     setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false, comment: '' }); // Reset predefined dialog state including comment
+      setDownloadDialogState({ isOpen: false, proposedFilename: '', finalFilename: '' }); // Reset download dialog state
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if (fileInput) fileInput.value = '';
      toast({ title: "Pronto", description: "Formulário resetado para nova conversão." });
@@ -324,11 +347,13 @@ export default function Home() {
       if (lowerHeader.includes('cnpj')) return 'CNPJ';
       if (lowerHeader.includes('cpf')) return 'CPF';
       if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
-      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Contábil';
+      // Updated: 'Contábil' removed, use 'Numérico' for currency/margins now
+      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('contabil') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Numérico';
        if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num')) return 'Inteiro'; // Prioritize integer for codes/numbers in header
       if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG often has letters/symbols
        if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Could be float or int, but Numérico is safer default
-       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao')) return 'Texto'; // Broaden Text/Alphanumeric categories
+       // Updated: 'Texto' removed, use 'Alfanumérico' for general text
+       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('texto') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao')) return 'Alfanumérico';
 
       // Guess based on sample data content if header wasn't decisive
        if (stringSample) {
@@ -337,15 +362,15 @@ export default function Home() {
             // Check for CPF/CNPJ-like patterns (basic)
             if (/^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/.test(stringSample)) return 'CPF';
             if (/^\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}$/.test(stringSample)) return 'CNPJ';
-            // Check for currency/accounting patterns
-            if (/[R$]/.test(stringSample) || /[,.]\d{2}$/.test(stringSample) || /^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(stringSample) || /^-?\d+,\d+$/.test(stringSample) ) return 'Contábil';
+            // Updated: Check for currency/accounting patterns -> Numérico
+            if (/[R$]/.test(stringSample) || /[,.]\d{2}$/.test(stringSample) || /^-?\d{1,3}(\.\d{3})*(,\d+)?$/.test(stringSample) || /^-?\d+,\d+$/.test(stringSample) ) return 'Numérico';
              // Check if purely integer
             if (/^-?\d+$/.test(stringSample)) return 'Inteiro';
              // Check if potentially numeric (allowing decimal point)
             if (/^-?\d+(\.\d+)?$/.test(stringSample)) return 'Numérico';
         }
 
-      // Default guess
+      // Default guess - Use Alfanumérico as the broadest default now
        if (/[a-zA-Z]/.test(lowerHeader) || (stringSample && /[a-zA-Z]/.test(stringSample))) return 'Alfanumérico';
        if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header is just digits
 
@@ -438,7 +463,8 @@ export default function Home() {
                                     mappedField: guessedField,
                                     dataType: guessedType,
                                     length: null,
-                                    removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
+                                    // Updated: Default mask removal for relevant types
+                                    removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
                                 };
                              }));
                              toast({ title: "Sucesso Parcial", description: `Cabeçalhos do PDF ${fileToProcess.name} processados. Nenhuma linha de dados retornada. Verifique o mapeamento.` });
@@ -472,7 +498,8 @@ export default function Home() {
                                 mappedField: guessedField,
                                 dataType: guessedType,
                                 length: null,
-                                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
+                                // Updated: Default mask removal for relevant types
+                                removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
                             }
                          }));
                          toast({ title: "Sucesso", description: `Arquivo PDF ${fileToProcess.name} processado. Verifique o mapeamento.` });
@@ -540,8 +567,8 @@ export default function Home() {
                  mappedField: guessedField,
                  dataType: guessedType,
                  length: null,
-                 // Default mask removal for CPF/RG/CNPJ/Date/Contabil/Numeric
-                 removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Contábil', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''), // Added CPF/CNPJ here too
+                  // Updated: Default mask removal for relevant types
+                 removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
              }
          }));
          toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
@@ -580,11 +607,12 @@ export default function Home() {
 
       if (field === 'dataType') {
          (currentMapping[field] as any) = actualValue;
-         if (actualValue !== 'Alfanumérico' && actualValue !== 'Texto') {
+         // Updated: Reset length only if not Alfanumeric anymore
+         if (actualValue !== 'Alfanumérico') {
            currentMapping.length = null; // Reset length if not text-based
          }
-         // Set default mask removal based on type
-         currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Contábil', 'Numérico', 'Inteiro'].includes(actualValue ?? ''); // Expanded mask default
+         // Updated: Set default mask removal based on relevant types
+         currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Numérico', 'Inteiro'].includes(actualValue ?? '');
 
        } else if (field === 'length') {
            const numValue = parseInt(value, 10);
@@ -601,8 +629,8 @@ export default function Home() {
                  const guessedType = predefined ? guessDataType(predefined.name, sampleData) : guessDataType(currentMapping.originalHeader, sampleData);
                  if(guessedType) currentMapping.dataType = guessedType;
 
-                 // Default mask removal for relevant types when field is mapped
-                 currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Contábil', 'Numérico', 'Inteiro'].includes(currentMapping.dataType ?? '');
+                 // Updated: Default mask removal for relevant types when field is mapped
+                 currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Numérico', 'Inteiro'].includes(currentMapping.dataType ?? '');
             }
        }
 
@@ -620,6 +648,7 @@ export default function Home() {
             isEditing: false,
             fieldName: '',
             persist: false, // Default to not persisting
+            comment: '', // Reset comment
         });
     };
 
@@ -629,7 +658,8 @@ export default function Home() {
             isEditing: true,
             fieldId: field.id,
             fieldName: field.name,
-            persist: !field.isCore, // Can only persist/unpersist custom fields
+            persist: localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY)?.includes(field.id) ?? false, // Check local storage if it's persisted
+            comment: field.comment || '', // Load comment
         });
     };
 
@@ -641,7 +671,7 @@ export default function Home() {
      };
 
    const savePredefinedField = () => {
-        const { isEditing, fieldId, fieldName, persist } = predefinedFieldDialogState;
+        const { isEditing, fieldId, fieldName, persist, comment } = predefinedFieldDialogState;
         const trimmedName = fieldName.trim();
 
         if (!trimmedName) {
@@ -672,12 +702,12 @@ export default function Home() {
 
           if (isEditing) {
               const originalField = predefinedFields.find(f => f.id === fieldId);
-              // Cannot change core fields to non-persistent or vice-versa
+              // Cannot change core fields to non-persistent or vice-versa, but can edit name/comment
                const canChangePersistence = !originalField?.isCore;
 
               updatedFields = predefinedFields.map(f =>
                   f.id === fieldId
-                      ? { ...f, name: trimmedName, isCore: originalField?.isCore ?? false } // Retain isCore status
+                      ? { ...f, name: trimmedName, comment: comment || '', isCore: originalField?.isCore ?? false } // Update name and comment, retain isCore
                       : f
               );
               fieldDescription += ' atualizado.';
@@ -691,7 +721,7 @@ export default function Home() {
                }
 
           } else {
-              const newField: PredefinedField = { id: newId, name: trimmedName, isCore: false }; // New fields are never core
+              const newField: PredefinedField = { id: newId, name: trimmedName, comment: comment || '', isCore: false }; // New fields are never core
               updatedFields = [...predefinedFields, newField];
               fieldDescription += ` adicionado com ID "${newId}".`;
                if (persist) {
@@ -702,12 +732,14 @@ export default function Home() {
           }
 
         setPredefinedFields(updatedFields);
-        if (persist || (isEditing && !persist && !predefinedFields.find(f => f.id === fieldId)?.isCore)) {
-            // Save if persisting a new/edited field OR unpersisting a custom field
-            saveCustomPredefinedFields(updatedFields);
-        }
 
-        setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false }); // Close and reset dialog
+        // Update localStorage based on persist flag
+        const fieldsToSave = updatedFields.filter(f => !f.isCore); // Get all custom fields
+        const currentlyPersisted = persist ? fieldsToSave : fieldsToSave.filter(f => f.id !== newId); // Filter out the current field if unpersisted
+        saveCustomPredefinedFields(currentlyPersisted);
+
+
+        setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', persist: false, comment: '' }); // Close and reset dialog
         toast({ title: "Sucesso", description: fieldDescription });
     };
 
@@ -732,8 +764,9 @@ export default function Home() {
       fields: prev.fields.filter(f => f.isStatic || f.mappedField !== idToRemove),
     }));
 
-     // Update localStorage
-     saveCustomPredefinedFields(updatedFields);
+     // Update localStorage (remove the field if it was persisted)
+     const currentlyPersisted = JSON.parse(localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY) || '[]') as PredefinedField[];
+     saveCustomPredefinedFields(currentlyPersisted.filter(f => f.id !== idToRemove));
 
     toast({ title: "Sucesso", description: `Campo "${fieldToRemove.name}" removido.` });
   };
@@ -846,7 +879,8 @@ export default function Home() {
     const newFieldId = availableMappedFields[0]!;
     const correspondingMapping = columnMappings.find(cm => cm.mappedField === newFieldId);
     const dataType = correspondingMapping?.dataType ?? null;
-    const defaultLength = (dataType === 'Alfanumérico' || dataType === 'Texto') ? correspondingMapping?.length : undefined; // Use mapping length for text, else undefined
+    // Updated: Use mapping length only for Alfanumeric
+    const defaultLength = dataType === 'Alfanumérico' ? correspondingMapping?.length : undefined;
 
     const newOutputField: OutputFieldConfig = {
         id: `mapped-${newFieldId}-${Date.now()}`, // More unique ID
@@ -1006,11 +1040,12 @@ export default function Home() {
                    const fieldId = `mapped-${m.mappedField!}-${index}`; // Consistent ID generation
                    const existingField = existingFieldsMap.get(m.mappedField!) as OutputFieldConfig | undefined;
 
+                   // Updated: Length from mapping relevant only for Alfanumeric
                     let baseField: Omit<OutputFieldConfig, 'id' | 'order' | 'isStatic' | 'mappedField'> & { mappedField: string, isStatic: false } = {
                        isStatic: false,
                        mappedField: m.mappedField!,
                         // Preserve existing values if they exist, otherwise set based on mapping/defaults
-                       length: existingField?.length ?? ((dataType === 'Alfanumérico' || dataType === 'Texto') ? (m.length ?? undefined) : undefined),
+                       length: existingField?.length ?? (dataType === 'Alfanumérico' ? (m.length ?? undefined) : undefined), // Length only for Alfanum from mapping
                        paddingChar: existingField?.paddingChar ?? undefined,
                        paddingDirection: existingField?.paddingDirection ?? undefined,
                        dateFormat: existingField?.dateFormat ?? (dataType === 'Data' ? 'YYYYMMDD' : undefined),
@@ -1018,7 +1053,7 @@ export default function Home() {
 
                    // Apply format-specific overrides ONLY if not already set from existingField
                    if (prevConfig.format === 'txt') {
-                        baseField.length = baseField.length ?? 10; // Ensure length for TXT
+                        baseField.length = baseField.length ?? 10; // Ensure length for TXT (default 10 if not Alfanum/existing)
                         baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
                         baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
                    } else {
@@ -1106,7 +1141,7 @@ export default function Home() {
                return prevConfig; // No change
            }
        });
-   }, [columnMappings, fileData, outputConfig.format, columnMappings]); // Rerun only when mappings, fileData or format change explicitly // Added columnMappings to dependency array
+   }, [columnMappings, fileData, outputConfig.format]); // Simplified dependencies
 
 
   // --- Conversion ---
@@ -1115,8 +1150,13 @@ export default function Home() {
     setProcessingMessage('Convertendo arquivo...');
     setConvertedData(''); // Clear previous results
 
-    if (!fileData || outputConfig.fields.length === 0) { // Allow conversion even if fileData is empty (e.g., PDF headers only)
-        toast({ title: "Erro", description: "Configure os campos de saída antes de converter.", variant: "destructive" });
+    if (!fileData && outputConfig.fields.every(f => f.isStatic === false)) { // Allow conversion if only static fields exist, even with empty fileData
+        toast({ title: "Erro", description: "Nenhum dado de entrada ou campo mapeado para converter.", variant: "destructive" });
+        setIsProcessing(false);
+        return;
+    }
+     if (outputConfig.fields.length === 0) {
+         toast({ title: "Erro", description: "Configure os campos de saída antes de converter.", variant: "destructive" });
         setIsProcessing(false);
         return;
     }
@@ -1125,7 +1165,11 @@ export default function Home() {
     const mappedOutputFields = outputConfig.fields.filter(f => !f.isStatic);
     const requiredMappings = columnMappings.filter(m => mappedOutputFields.some(f => !f.isStatic && f.mappedField === m.mappedField)); // Filter non-static
 
-    if (requiredMappings.some(m => m.mappedField && !m.dataType)) {
+    // Allow skipping data type validation if the field isn't actually used in the output
+    const usedMappedFields = new Set(mappedOutputFields.map(f => f.mappedField));
+    const mappingsUsedInOutput = columnMappings.filter(m => m.mappedField && usedMappedFields.has(m.mappedField));
+
+    if (mappingsUsedInOutput.some(m => !m.dataType)) {
         toast({ title: "Erro", description: "Defina o 'Tipo' para todos os campos mapeados usados na saída.", variant: "destructive" });
         setIsProcessing(false);
         return;
@@ -1157,8 +1201,8 @@ export default function Home() {
       let resultString = '';
       const sortedOutputFields = [...outputConfig.fields].sort((a, b) => a.order - b.order);
 
-      // Handle case where fileData might be empty (e.g., PDF headers only)
-      const dataToProcess = fileData.length > 0 ? fileData : [{}]; // Process at least once for static fields
+      // Handle case where fileData might be empty (e.g., PDF headers only or only static fields)
+      const dataToProcess = fileData && fileData.length > 0 ? fileData : [{}]; // Process at least once for static fields
 
       dataToProcess.forEach(row => {
         let line = '';
@@ -1172,11 +1216,11 @@ export default function Home() {
              value = outputField.staticValue ?? '';
              originalValue = value;
              // Treat static numeric strings for padding purposes
-             dataType = /^-?\d+([.,]\d+)?$/.test(value) ? 'Numérico' : 'Texto';
+             dataType = /^-?\d+([.,]\d+)?$/.test(value) ? 'Numérico' : 'Alfanumérico'; // Use Alfanumérico as default text type
           } else {
              mapping = columnMappings.find(m => m.mappedField === outputField.mappedField);
-             if (!mapping || !mapping.originalHeader || fileData.length === 0) { // Check if fileData is empty too
-                 if(fileData.length > 0) console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
+             if (!mapping || !mapping.originalHeader || !fileData || fileData.length === 0) { // Check if fileData exists and is not empty
+                 if(fileData && fileData.length > 0) console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
                  value = ''; // Default to empty string if mapping missing or no data rows
              } else {
                  originalValue = row[mapping.originalHeader] ?? ''; // Get original value
@@ -1218,25 +1262,7 @@ export default function Home() {
                                 value = '0.00'; // Default if no valid number found
                             }
                           break;
-                      case 'Contábil':
-                           // After mask removal, value might be "1234.56" or "-350.00" or just "500"
-                           // Format as integer cents (e.g., 1234.56 -> 123456, -350.00 -> -35000)
-                            const accStr = value.replace(',', '.'); // Ensure dot as decimal sep
-                            const accMatch = accStr.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/);
-                            if (accMatch && accMatch[0]) {
-                                let accVal = parseFloat(accMatch[0]);
-                                if (isNaN(accVal)) {
-                                    value = '0'; // Default to 0 cents if parsing fails
-                                } else {
-                                     value = Math.round(accVal * 100).toString();
-                                }
-                            } else if (value === '0' || value === '') { // Handle empty string as 0 too
-                                value = '0'; // Explicitly handle "0" or empty
-                            } else {
-                                console.warn(`Could not parse contábil value: ${originalValue} (processed: ${value}). Defaulting to 0.`);
-                                value = '0'; // Default
-                            }
-                          break;
+                       // Removed 'Contábil' case
                        case 'Data':
                             try {
                                 let parsedDate: Date | null = null;
@@ -1373,8 +1399,7 @@ export default function Home() {
                                 value = '';
                             }
                             break;
-                      case 'Alfanumérico':
-                      case 'Texto':
+                      case 'Alfanumérico': // Updated: Replaced 'Texto'
                       default:
                           // Value is already trimmed string, potentially with mask removed
                           break;
@@ -1395,9 +1420,8 @@ export default function Home() {
                  if (processedValue.length > len) {
                       console.warn(`Truncating value "${processedValue}" for field ${outputField.isStatic ? outputField.fieldName : outputField.mappedField} as it exceeds length ${len}`);
                       // Truncate based on padding direction (or a sensible default)
-                      // Defaulting to truncating from the right for simplicity.
                        // Keep sign if numeric and padding left
-                      if (padDir === 'left' && (dataType === 'Numérico' || dataType === 'Contábil' || dataType === 'Inteiro' || (outputField.isStatic && /^-?\d/.test(processedValue)))) {
+                      if (padDir === 'left' && (dataType === 'Numérico' || dataType === 'Inteiro' || (outputField.isStatic && /^-?\d/.test(processedValue)))) { // Updated types
                           const isNegative = processedValue.startsWith('-');
                           const absValue = isNegative ? processedValue.substring(1) : processedValue;
                            const targetLength = isNegative ? len - 1 : len; // Leave space for sign if needed
@@ -1406,11 +1430,13 @@ export default function Home() {
                                processedValue = isNegative ? '-' : ''; // Only keep sign if len=1 and negative, else empty
                                if (processedValue.length > len) processedValue = processedValue.substring(0, len); // Ensure length constraint
                            } else {
+                               // When truncating numbers padded left, take the rightmost part
                                const truncatedAbs = absValue.substring(absValue.length - targetLength);
                                processedValue = isNegative ? '-' + truncatedAbs : truncatedAbs;
                            }
 
                       } else {
+                         // For right padding or non-numeric left padding, take leftmost part
                          processedValue = processedValue.substring(0, len);
                       }
 
@@ -1459,19 +1485,9 @@ export default function Home() {
              // Handle numeric types that should use dot as decimal separator in CSV
               if (dataType === 'Numérico') {
                    // Value should already be 'XXX.YY' from processing step, replace dot with comma for Brazilian CSV standard?
-                   // csvValue = csvValue.replace('.', ','); // Optional: If comma is desired decimal separator in CSV
-              } else if(dataType === 'Contábil') {
-                  // Value is likely integer cents 'XXXX'. Convert back to decimal for CSV?
-                   // Example: '12345' -> '123.45'
-                   // const cents = parseInt(csvValue, 10);
-                   // if (!isNaN(cents)) {
-                   //     csvValue = (cents / 100).toFixed(2);
-                   //      // csvValue = csvValue.replace('.', ','); // Optional: comma separator
-                   // } else {
-                   //     csvValue = '0.00'; // or '0,00'
-                   // }
-                   // OR keep as integer cents? Depends on requirement. Keeping as cents for now.
+                    csvValue = csvValue.replace('.', ','); // Optional: If comma is desired decimal separator in CSV
               }
+              // Removed 'Contábil' specific handling
 
              const needsQuotes = csvValue.includes(outputConfig.delimiter!) || csvValue.includes('"') || csvValue.includes('\n');
              if (needsQuotes) {
@@ -1502,8 +1518,27 @@ export default function Home() {
     }
   };
 
-   const downloadConvertedFile = () => {
+   const openDownloadDialog = () => {
         if (!convertedData) return;
+        const proposed = `${fileName.split('.').slice(0, -1).join('.')}_convertido.${outputConfig.format}`;
+        setDownloadDialogState({
+            isOpen: true,
+            proposedFilename: proposed,
+            finalFilename: proposed, // Default to proposed
+        });
+    };
+
+    const handleDownloadFilenameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+         setDownloadDialogState(prev => ({
+             ...prev,
+             finalFilename: event.target.value,
+         }));
+     };
+
+
+   const confirmDownload = () => {
+        const { finalFilename } = downloadDialogState;
+        if (!convertedData || !finalFilename) return;
 
         const mimeType = outputConfig.format === 'txt'
             ? `text/plain;charset=${outputEncoding.toLowerCase()}`
@@ -1517,13 +1552,13 @@ export default function Home() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        const outputFileName = `${fileName.split('.').slice(0, -1).join('.')}_convertido.${outputConfig.format}`;
-        link.download = outputFileName;
+        link.download = finalFilename.endsWith(`.${outputConfig.format}`) ? finalFilename : `${finalFilename}.${outputConfig.format}`; // Ensure correct extension
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        toast({ title: "Download Iniciado", description: `Arquivo ${outputFileName} sendo baixado.`});
+        toast({ title: "Download Iniciado", description: `Arquivo ${link.download} sendo baixado.`});
+        setDownloadDialogState({ isOpen: false, proposedFilename: '', finalFilename: '' }); // Close dialog
     };
 
   // Memoized list of predefined fields available for mapping dropdowns
@@ -1589,11 +1624,11 @@ export default function Home() {
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
              <TabsList className="grid w-full grid-cols-4 mb-6">
-                  {/* Add data-state to apply custom active style */}
-                 <TabsTrigger value="upload" disabled={isProcessing} data-state={activeTab === 'upload' ? 'active' : 'inactive'}>1. Upload</TabsTrigger>
-                 <TabsTrigger value="mapping" disabled={isProcessing || !file} data-state={activeTab === 'mapping' ? 'active' : 'inactive'}>2. Mapeamento</TabsTrigger>
-                 <TabsTrigger value="config" disabled={isProcessing || !file } data-state={activeTab === 'config' ? 'active' : 'inactive'}>3. Configurar Saída</TabsTrigger> {/* Removed headers length check */}
-                 <TabsTrigger value="result" disabled={isProcessing || !convertedData} data-state={activeTab === 'result' ? 'active' : 'inactive'}>4. Resultado</TabsTrigger>
+                  {/* Apply custom active style using data-state */}
+                 <TabsTrigger value="upload" disabled={isProcessing} data-state={activeTab === 'upload' ? 'active' : 'inactive'} className={activeTab === 'upload' ? 'tabs-trigger-active' : ''}>1. Upload</TabsTrigger>
+                 <TabsTrigger value="mapping" disabled={isProcessing || !file} data-state={activeTab === 'mapping' ? 'active' : 'inactive'} className={activeTab === 'mapping' ? 'tabs-trigger-active' : ''}>2. Mapeamento</TabsTrigger>
+                 <TabsTrigger value="config" disabled={isProcessing || !file } data-state={activeTab === 'config' ? 'active' : 'inactive'} className={activeTab === 'config' ? 'tabs-trigger-active' : ''}>3. Configurar Saída</TabsTrigger>
+                 <TabsTrigger value="result" disabled={isProcessing || !convertedData} data-state={activeTab === 'result' ? 'active' : 'inactive'} className={activeTab === 'result' ? 'tabs-trigger-active' : ''}>4. Resultado</TabsTrigger>
              </TabsList>
 
             {/* 1. Upload Tab */}
@@ -1696,7 +1731,7 @@ export default function Home() {
                                             <TooltipContent>
                                                 <p>Opcional. Define o tamanho máx.</p>
                                                 <p>Usado para definir o tamanho na saída TXT.</p>
-                                                <p>(Ignorado para tipos não-texto no mapeamento).</p>
+                                                <p>(Ignorado para tipos não-Alfanuméricos).</p> {/* Updated comment */}
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
@@ -1710,7 +1745,7 @@ export default function Home() {
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 <p>Remove caracteres não numéricos/separadores.</p>
-                                                <p>Útil para CPF, CNPJ, Data, Numérico, Contábil etc.</p>
+                                                <p>Útil para CPF, CNPJ, Data, Numérico etc.</p> {/* Updated types */}
                                                  <p>(Padrão: Ativado para tipos relevantes)</p>
                                             </TooltipContent>
                                         </Tooltip>
@@ -1719,67 +1754,85 @@ export default function Home() {
                                </TableRow>
                              </TableHeader>
                              <TableBody>
-                               {columnMappings.map((mapping, index) => (
-                                 <TableRow key={index}>
-                                   <TableCell className="font-medium text-xs">{mapping.originalHeader}</TableCell>
-                                   <TableCell>
-                                     <Select
-                                       value={mapping.mappedField || NONE_VALUE_PLACEHOLDER}
-                                       onValueChange={(value) => handleMappingChange(index, 'mappedField', value)}
-                                        disabled={isProcessing}
-                                     >
-                                       <SelectTrigger className="text-xs h-8">
-                                         <SelectValue placeholder="Selecione ou deixe em branco" />
-                                       </SelectTrigger>
-                                       <SelectContent>
-                                         <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
-                                         {memoizedPredefinedFields.map(field => ( // Use memoized list
-                                           <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
-                                         ))}
-                                       </SelectContent>
-                                     </Select>
-                                   </TableCell>
-                                   <TableCell>
-                                     <Select
-                                       value={mapping.dataType || NONE_VALUE_PLACEHOLDER}
-                                       onValueChange={(value) => handleMappingChange(index, 'dataType', value)}
-                                       disabled={isProcessing || !mapping.mappedField} // Disable if not mapped
-                                     >
-                                       <SelectTrigger className="text-xs h-8">
-                                         <SelectValue placeholder="Tipo (Obrigatório se mapeado)" />
-                                       </SelectTrigger>
-                                       <SelectContent>
-                                         <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
-                                         {DATA_TYPES.map(type => (
-                                           <SelectItem key={type} value={type}>{type}</SelectItem>
-                                         ))}
-                                       </SelectContent>
-                                     </Select>
-                                   </TableCell>
-                                   <TableCell>
-                                     <Input
-                                       type="number"
-                                       min="1"
-                                       value={mapping.length ?? ''}
-                                       onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
-                                       placeholder="Tam." // Shorter placeholder
-                                       className="w-full text-xs h-8"
-                                        // Enable only if type allows length and TXT output might be used
-                                       disabled={isProcessing || !mapping.dataType || !['Alfanumérico', 'Texto'].includes(mapping.dataType)}
-                                     />
-                                   </TableCell>
-                                    <TableCell className="text-center"> {/* Center align Switch */}
-                                      <Switch
-                                          checked={mapping.removeMask}
-                                          onCheckedChange={(checked) => handleMappingChange(index, 'removeMask', checked)}
-                                          // Enable for relevant types where mask removal makes sense
-                                          disabled={isProcessing || !mapping.dataType || ['Alfanumérico', 'Texto'].includes(mapping.dataType)} // Disable for plain text types
-                                          aria-label={`Remover máscara para ${mapping.originalHeader}`}
-                                          className="scale-75" // Slightly smaller switch
-                                      />
-                                   </TableCell>
-                                 </TableRow>
-                               ))}
+                               {columnMappings.map((mapping, index) => {
+                                 const mappedFieldDetails = mapping.mappedField ? predefinedFields.find(pf => pf.id === mapping.mappedField) : null;
+                                 return (
+                                     <TableRow key={index}>
+                                       <TableCell className="font-medium text-xs">{mapping.originalHeader}</TableCell>
+                                       <TableCell>
+                                            <div className="flex items-center gap-1"> {/* Container for select and tooltip */}
+                                                 <Select
+                                                   value={mapping.mappedField || NONE_VALUE_PLACEHOLDER}
+                                                   onValueChange={(value) => handleMappingChange(index, 'mappedField', value)}
+                                                    disabled={isProcessing}
+                                                 >
+                                                   <SelectTrigger className="text-xs h-8 flex-grow"> {/* Allow select to grow */}
+                                                     <SelectValue placeholder="Selecione ou deixe em branco" />
+                                                   </SelectTrigger>
+                                                   <SelectContent>
+                                                     <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
+                                                     {memoizedPredefinedFields.map(field => ( // Use memoized list
+                                                       <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
+                                                     ))}
+                                                   </SelectContent>
+                                                 </Select>
+                                                 {/* Tooltip for comment */}
+                                                 {mappedFieldDetails?.comment && (
+                                                      <TooltipProvider>
+                                                          <Tooltip>
+                                                              <TooltipTrigger asChild>
+                                                                  <HelpCircle className="h-4 w-4 text-muted-foreground flex-shrink-0 cursor-help" />
+                                                              </TooltipTrigger>
+                                                              <TooltipContent>
+                                                                  <p>{mappedFieldDetails.comment}</p>
+                                                              </TooltipContent>
+                                                          </Tooltip>
+                                                      </TooltipProvider>
+                                                  )}
+                                           </div>
+                                       </TableCell>
+                                       <TableCell>
+                                         <Select
+                                           value={mapping.dataType || NONE_VALUE_PLACEHOLDER}
+                                           onValueChange={(value) => handleMappingChange(index, 'dataType', value)}
+                                           disabled={isProcessing || !mapping.mappedField} // Disable if not mapped
+                                         >
+                                           <SelectTrigger className="text-xs h-8">
+                                             <SelectValue placeholder="Tipo (Obrigatório se mapeado)" />
+                                           </SelectTrigger>
+                                           <SelectContent>
+                                             <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                             {DATA_TYPES.map(type => ( // Updated DATA_TYPES
+                                               <SelectItem key={type} value={type}>{type}</SelectItem>
+                                             ))}
+                                           </SelectContent>
+                                         </Select>
+                                       </TableCell>
+                                       <TableCell>
+                                         <Input
+                                           type="number"
+                                           min="1"
+                                           value={mapping.length ?? ''}
+                                           onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
+                                           placeholder="Tam." // Shorter placeholder
+                                           className="w-full text-xs h-8"
+                                            // Updated: Enable only for Alfanumérico
+                                           disabled={isProcessing || !mapping.dataType || mapping.dataType !== 'Alfanumérico'}
+                                         />
+                                       </TableCell>
+                                        <TableCell className="text-center"> {/* Center align Switch */}
+                                          <Switch
+                                              checked={mapping.removeMask}
+                                              onCheckedChange={(checked) => handleMappingChange(index, 'removeMask', checked)}
+                                               // Updated: Disable only for Alfanumérico
+                                              disabled={isProcessing || !mapping.dataType || mapping.dataType === 'Alfanumérico'}
+                                              aria-label={`Remover máscara para ${mapping.originalHeader}`}
+                                              className="scale-75" // Slightly smaller switch
+                                          />
+                                       </TableCell>
+                                     </TableRow>
+                                   );
+                               })}
                              </TableBody>
                            </Table>
                          </div>
@@ -1800,11 +1853,31 @@ export default function Home() {
                          <div className="space-y-2 max-h-40 overflow-y-auto border rounded p-2 bg-secondary/30">
                               {memoizedPredefinedFields.map(field => ( // Use memoized list
                                  <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0">
-                                     <div>
+                                     <div className="flex items-center gap-1"> {/* Group name, id, icons */}
                                          <span className="text-sm font-medium">{field.name}</span>
-                                         <span className="text-xs text-muted-foreground ml-2">({field.id})</span>
-                                         {field.isCore && <span className="ml-2 text-xs text-blue-500">(Original)</span>}
-                                          {!field.isCore && localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY)?.includes(field.id) && <Save className="h-3 w-3 inline-block ml-2 text-green-600" title="Persistente" />}
+                                         <span className="text-xs text-muted-foreground">({field.id})</span>
+                                         {field.isCore && <span className="ml-1 text-xs text-blue-500">(Original)</span>}
+                                          {/* Check localStorage for persistence */}
+                                          {!field.isCore && localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY)?.includes(`"id":"${field.id}"`) && (
+                                                <TooltipProvider>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <Save className="h-3 w-3 inline-block ml-1 text-green-600 cursor-help" />
+                                                        </TooltipTrigger>
+                                                        <TooltipContent><p>Persistente (salvo no navegador)</p></TooltipContent>
+                                                    </Tooltip>
+                                                </TooltipProvider>
+                                            )}
+                                          {field.comment && (
+                                               <TooltipProvider>
+                                                  <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <HelpCircle className="h-3 w-3 inline-block ml-1 text-muted-foreground cursor-help" />
+                                                        </TooltipTrigger>
+                                                        <TooltipContent><p>{field.comment}</p></TooltipContent>
+                                                    </Tooltip>
+                                                </TooltipProvider>
+                                           )}
                                      </div>
                                      <div className="flex gap-1">
                                            <TooltipProvider>
@@ -1815,7 +1888,7 @@ export default function Home() {
                                                             size="icon"
                                                             onClick={() => openEditPredefinedFieldDialog(field)}
                                                             disabled={isProcessing}
-                                                            className="h-7 w-7 text-muted-foreground hover:text-accent"
+                                                            className="h-7 w-7 text-muted-foreground hover:text-accent" // Changed hover color
                                                             aria-label={`Editar campo ${field.name}`}
                                                         >
                                                             <Edit className="h-4 w-4" />
@@ -2203,7 +2276,7 @@ export default function Home() {
                                  <Button onClick={resetState} variant="outline" className="mr-2" disabled={isProcessing}>
                                      <Trash2 className="mr-2 h-4 w-4" /> Nova Conversão
                                  </Button>
-                                 <Button onClick={downloadConvertedFile} disabled={isProcessing || !convertedData} variant="default">
+                                 <Button onClick={openDownloadDialog} disabled={isProcessing || !convertedData} variant="default">
                                      Baixar Arquivo Convertido
                                  </Button>
                             </div>
@@ -2217,9 +2290,18 @@ export default function Home() {
           </Tabs>
         </CardContent>
 
-        <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t flex justify-between items-center">
-           <span>© {new Date().getFullYear()} SCA. Ferramenta de conversão de dados.</span>
-           <span className="font-mono text-accent">v{appVersion}</span> {/* Display Version */}
+        <CardFooter className="text-center text-xs text-muted-foreground pt-4 border-t flex flex-col sm:flex-row justify-between items-center gap-2">
+            {/* Ads Placeholder */}
+             <div className="flex gap-4 justify-center w-full sm:w-auto">
+                 <div className="w-32 h-16 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-muted-foreground text-xs rounded">Ad Placeholder 1</div>
+                 <div className="w-32 h-16 bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-muted-foreground text-xs rounded">Ad Placeholder 2</div>
+             </div>
+             <div className="flex flex-col items-center sm:items-end">
+                 <span>
+                     © {new Date().getFullYear()} SCA. Ferramenta de conversão de dados. - Desenvolvido por <a href="mailto:faraujo@gmail.com" className="text-accent hover:underline">Fábio Araújo</a>
+                 </span>
+                 <span className="font-mono text-accent mt-1">v{appVersion}</span> {/* Display Version */}
+            </div>
         </CardFooter>
       </Card>
 
@@ -2326,7 +2408,7 @@ export default function Home() {
                     <DialogTitle>{predefinedFieldDialogState.isEditing ? 'Editar' : 'Adicionar'} Campo Pré-definido</DialogTitle>
                     <DialogDescription>
                         {predefinedFieldDialogState.isEditing
-                            ? "Edite o nome do campo personalizado."
+                            ? "Edite o nome e o comentário do campo personalizado."
                             : "Adicione um novo campo para usar no mapeamento."}
                          Campos originais não podem ser removidos ou ter persistência alterada.
                     </DialogDescription>
@@ -2334,7 +2416,7 @@ export default function Home() {
                 <div className="grid gap-4 py-4">
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="predefined-field-name" className="text-right">
-                            Nome
+                            Nome*
                         </Label>
                         <Input
                             id="predefined-field-name"
@@ -2342,23 +2424,37 @@ export default function Home() {
                             onChange={(e) => handlePredefinedFieldDialogChange('fieldName', e.target.value)}
                             className="col-span-3"
                             placeholder="Ex: ID Cliente"
+                            required
                         />
                     </div>
-                    {!predefinedFields.find(f => f.id === predefinedFieldDialogState.fieldId)?.isCore && ( // Only show for non-core fields
-                         <div className="grid grid-cols-4 items-center gap-4">
-                             <Label htmlFor="predefined-persist" className="text-right col-span-3">
-                                Manter para futuras conversões?
-                             </Label>
-                             <div className="col-span-1 flex items-center justify-start">
-                                <Checkbox
-                                     id="predefined-persist"
-                                     checked={predefinedFieldDialogState.persist}
-                                     onCheckedChange={(checked) => handlePredefinedFieldDialogChange('persist', Boolean(checked))} // Ensure boolean
-                                     aria-label="Manter campo para futuras conversões"
-                                 />
-                             </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                         <Label htmlFor="predefined-field-comment" className="text-right">
+                             Comentário
+                         </Label>
+                         <Textarea
+                             id="predefined-field-comment"
+                             value={predefinedFieldDialogState.comment}
+                             onChange={(e) => handlePredefinedFieldDialogChange('comment', e.target.value)}
+                             className="col-span-3 min-h-[60px]" // Adjust height
+                             placeholder="Opcional: Descrição curta ou instrução de uso"
+                         />
+                    </div>
+                     {/* Allow changing persistence for custom fields, show current state for core fields */}
+                    <div className="grid grid-cols-4 items-center gap-4">
+                         <Label htmlFor="predefined-persist" className="text-right col-span-3">
+                            Manter para futuras conversões?
+                         </Label>
+                         <div className="col-span-1 flex items-center justify-start">
+                            <Checkbox
+                                 id="predefined-persist"
+                                 checked={predefinedFieldDialogState.persist}
+                                 onCheckedChange={(checked) => handlePredefinedFieldDialogChange('persist', Boolean(checked))} // Ensure boolean
+                                 aria-label="Manter campo para futuras conversões"
+                                 disabled={predefinedFields.find(f => f.id === predefinedFieldDialogState.fieldId)?.isCore} // Disable for core fields
+                             />
                          </div>
-                    )}
+                     </div>
+                    <p className="text-xs text-muted-foreground col-span-4">* Nome é obrigatório.</p>
                 </div>
                 <DialogFooter>
                     <DialogClose asChild>
@@ -2367,6 +2463,38 @@ export default function Home() {
                     <Button type="button" onClick={savePredefinedField}>
                          {predefinedFieldDialogState.isEditing ? 'Salvar Alterações' : 'Adicionar Campo'}
                     </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
+       {/* Download File Dialog */}
+        <Dialog open={downloadDialogState.isOpen} onOpenChange={(isOpen) => setDownloadDialogState(prev => ({ ...prev, isOpen }))}>
+            <DialogContent className="sm:max-w-[425px]">
+                <DialogHeader>
+                    <DialogTitle>Renomear e Baixar Arquivo</DialogTitle>
+                    <DialogDescription>
+                       Confirme ou altere o nome do arquivo antes de baixar.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                    <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="download-filename" className="text-right">
+                            Nome do Arquivo
+                        </Label>
+                        <Input
+                            id="download-filename"
+                            value={downloadDialogState.finalFilename}
+                            onChange={handleDownloadFilenameChange}
+                            className="col-span-3"
+                            placeholder="Nome do arquivo de saída"
+                        />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <DialogClose asChild>
+                        <Button type="button" variant="outline">Cancelar</Button>
+                    </DialogClose>
+                    <Button type="button" onClick={confirmDownload} disabled={!downloadDialogState.finalFilename}>Confirmar Download</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
