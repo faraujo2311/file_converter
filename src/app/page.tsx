@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2, Save, RotateCcw, ArrowUp, ArrowDown, Calculator, Server } from 'lucide-react'; // Added Edit, Code, Loader2, Save, RotateCcw, ArrowUp, ArrowDown, Calculator, Server
+import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2, Save, RotateCcw, ArrowUp, ArrowDown, Calculator, Server, Info } from 'lucide-react'; // Added Info icon
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from "@/components/ui/switch";
@@ -23,14 +23,16 @@ import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"; // Import Popover
 
 
-// NOTE: Full authentication, RBAC, admin panel, user-specific backend storage,
-// captcha, IP logging, and session management features requested for v1.1.0
-// are deferred due to their complexity and requirement for significant
-// backend architecture changes (e.g., adding Firebase Auth/Firestore).
-// This implementation focuses on client-side enhancements:
+// NOTE (v1.1.0): Full authentication, RBAC, admin panel, user-specific backend storage,
+// captcha, IP logging, session management features, LGPD compliance measures (beyond disclaimer),
+// and draggable reordering requested for v1.1.0 are DEFERRED.
+// These features require significant backend architecture changes (e.g., adding Firebase Auth/Firestore)
+// and are beyond the scope of current client-side capabilities.
+// This implementation focuses on client-side features implemented previously:
 // - Button-based reordering for output fields.
-// - Save/Load configurations using localStorage.
-// - UI and basic logic for calculated fields (starting with Calcular_Data_Inicial).
+// - Save/Load configurations using localStorage (browser-specific, not user-specific).
+// - UI and basic logic for calculated fields (CalculateStartDate).
+// - Placeholder UI for login and dashboard exist but lack backend integration.
 
 // Define types
 type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Data' | 'CPF' | 'CNPJ';
@@ -299,7 +301,7 @@ export default function Home() {
     const [savedConfigs, setSavedConfigs] = useState<OutputConfig[]>([]); // State for saved configurations
 
 
-  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0';
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.0'; // Set current version
 
    // Load predefined fields and saved configurations from localStorage on mount
    useEffect(() => {
@@ -545,7 +547,7 @@ export default function Home() {
 
              const pdfReader = new FileReader();
              pdfReader.onload = async (e) => {
-                 const pdfDataUri = e.target?.result as string;
+                 const pdfDataUri = e.target?.result as string; // Access result directly
                  if (!pdfDataUri) {
                       toast({ title: "Erro", description: "Falha ao ler o arquivo PDF.", variant: "destructive" });
                       setIsProcessing(false);
@@ -654,9 +656,9 @@ export default function Home() {
                  setColumnMappings([]);
                  setIsProcessing(false);
              };
-             pdfReader.readAsDataURL(fileToProcess);
+             pdfReader.readAsDataURL(fileToProcess); // Use readAsDataURL for the AI flow
 
-             return;
+             return; // Prevent further execution for PDF
 
          } else {
              throw new Error("Tipo de arquivo não suportado para processamento.");
@@ -664,7 +666,8 @@ export default function Home() {
 
          // --- Common processing logic for non-PDF ---
          if (extractedHeaders.length === 0 && extractedData.length > 0) {
-             extractedHeaders = Object.keys(extractedData[0]).map((_, i) => `Coluna ${i + 1}`);
+             // Attempt to generate headers if none found but data exists
+             extractedHeaders = Object.keys(extractedData[0]).map((key, i) => `Coluna ${i + 1}`);
              toast({ title: "Aviso", description: "Cabeçalhos não encontrados, usando 'Coluna 1', 'Coluna 2', etc.", variant: "default" });
          } else if (extractedHeaders.length === 0) {
               throw new Error("Não foi possível extrair cabeçalhos ou dados do arquivo.");
@@ -699,7 +702,7 @@ export default function Home() {
          setFileData([]);
          setColumnMappings([]);
      } finally {
-         if (!fileToProcess?.type.includes('pdf')) {
+         if (!fileToProcess?.type.includes('pdf')) { // Only reset processing if not PDF (PDF handles it in onload/onerror)
              setIsProcessing(false);
              setProcessingMessage('Processando...');
          }
@@ -718,24 +721,34 @@ export default function Home() {
 
       if (field === 'dataType') {
          (currentMapping[field] as any) = actualValue;
-         if (actualValue !== 'Alfanumérico') {
-           currentMapping.length = null;
+         // Reset length only if changing FROM Alfanumérico TO something else
+         if (newMappings[index].dataType === 'Alfanumérico' && actualValue !== 'Alfanumérico') {
+             currentMapping.length = null;
          }
+         // Set default removeMask based on the new type
          currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Numérico', 'Inteiro'].includes(actualValue ?? '');
 
        } else if (field === 'length') {
            const numValue = parseInt(value, 10);
-           currentMapping.length = isNaN(numValue) || numValue <= 0 ? null : numValue;
+           // Allow setting length only for Alfanumérico
+           currentMapping.length = (currentMapping.dataType === 'Alfanumérico' && !isNaN(numValue) && numValue > 0) ? numValue : null;
        } else if (field === 'removeMask') {
            currentMapping.removeMask = Boolean(value);
        } else {
           (currentMapping[field] as any) = actualValue;
+            // Auto-guess type and set removeMask if mapping changes and type is null
             if (field === 'mappedField' && actualValue && !currentMapping.dataType) {
                  const predefined = predefinedFields.find(pf => pf.id === actualValue);
                   const sampleData = fileData.length > 0 ? fileData[0][currentMapping.originalHeader] : '';
                  const guessedType = predefined ? guessDataType(predefined.name, sampleData) : guessDataType(currentMapping.originalHeader, sampleData);
-                 if(guessedType) currentMapping.dataType = guessedType;
-                 currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Numérico', 'Inteiro'].includes(currentMapping.dataType ?? '');
+                 if(guessedType) {
+                     currentMapping.dataType = guessedType;
+                     currentMapping.removeMask = ['CPF', 'RG', 'CNPJ', 'Data', 'Numérico', 'Inteiro'].includes(guessedType);
+                     // Reset length if guessed type is not Alfanumérico
+                      if (guessedType !== 'Alfanumérico') {
+                          currentMapping.length = null;
+                      }
+                 }
             }
        }
 
@@ -845,7 +858,7 @@ export default function Home() {
     const fieldToRemove = predefinedFields.find(f => f.id === idToRemove);
     if (!fieldToRemove) return;
 
-    // Allow removing any field now
+    // Prevent removing core fields - uncomment if strict core field protection is needed
     // if (fieldToRemove.isCore) {
     //   toast({ title: "Aviso", description: `Não é possível remover o campo pré-definido original "${fieldToRemove.name}".`, variant: "default" });
     //   return;
@@ -856,10 +869,21 @@ export default function Home() {
 
     // Update mappings that used this field
     setColumnMappings(prev => prev.map(m => m.mappedField === idToRemove ? { ...m, mappedField: null } : m));
-    // Update output config (remove if it was a mapped field)
+    // Update output config (remove if it was a mapped field, static, or calculated using it)
     setOutputConfig(prev => ({
       ...prev,
-      fields: prev.fields.filter(f => f.isStatic || f.isCalculated || f.mappedField !== idToRemove), // Also keep calculated
+       fields: prev.fields
+            .filter(f => {
+                 if (f.isStatic) return true; // Keep static fields
+                 if (f.isCalculated) {
+                     // Remove calculated field if it requires the removed predefined field
+                     return !f.requiredInputFields.includes(idToRemove);
+                 }
+                 // Remove mapped field if it used the removed predefined field
+                 return f.mappedField !== idToRemove;
+            })
+            // Renumber order after filtering
+            .map((f, idx) => ({ ...f, order: idx })),
     }));
 
      // Update localStorage
@@ -874,10 +898,12 @@ export default function Home() {
       setOutputConfig(prev => {
           const newFields = prev.fields.map(f => ({
               ...f,
+              // Keep delimiter if switching TO csv, otherwise remove
               delimiter: value === 'csv' ? (prev.delimiter || '|') : undefined,
-              length: value === 'txt' ? (f.length ?? (f.isStatic ? (f.staticValue?.length || 10) : f.isCalculated ? 10 : 10)) : undefined, // Default length for calculated too
-              paddingChar: value === 'txt' ? (f.paddingChar ?? getDefaultPaddingChar(f, columnMappings)) : undefined,
-              paddingDirection: value === 'txt' ? (f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings)) : undefined,
+               // Set default length/padding ONLY if switching TO txt and they don't exist
+               length: value === 'txt' ? (f.length ?? (f.isStatic ? (f.staticValue?.length || 10) : f.isCalculated ? 10 : 10)) : f.length, // Keep existing length if switching away from TXT
+               paddingChar: value === 'txt' ? (f.paddingChar ?? getDefaultPaddingChar(f, columnMappings)) : f.paddingChar,
+               paddingDirection: value === 'txt' ? (f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings)) : f.paddingDirection,
           }));
           return {
               ...prev,
@@ -904,57 +930,78 @@ export default function Home() {
                         const correspondingMapping = columnMappings.find(cm => cm.mappedField === actualValue);
                         const dataType = correspondingMapping?.dataType ?? null;
 
-                        if (prev.format === 'txt') {
-                            updatedField.length = updatedField.length ?? (correspondingMapping?.length ?? 10);
-                            updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
-                            updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
-                        } else {
-                             delete updatedField.length;
-                             delete updatedField.paddingChar;
-                             delete updatedField.paddingDirection;
-                        }
+                        // Set defaults for TXT only if format is TXT
+                         if (prev.format === 'txt') {
+                            updatedField.length = updatedField.length ?? (correspondingMapping?.dataType === 'Alfanumérico' ? correspondingMapping.length : 10) ?? 10; // Default 10 if no mapping length
+                             updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                             updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
+                         }
+                         // Keep existing TXT settings if format is CSV
+
+                        // Handle date format based on data type
                         if (dataType === 'Data') {
                             updatedField.dateFormat = updatedField.dateFormat ?? 'YYYYMMDD';
                         } else {
-                            delete updatedField.dateFormat;
+                            delete updatedField.dateFormat; // Remove date format if not a date type
                         }
                 } else if (field === 'length') {
                     const numValue = parseInt(value, 10);
-                    updatedField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
-                     if (prev.format === 'txt') {
-                          updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
-                          updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
-                     }
+                    // Only store length if format is TXT
+                    if (prev.format === 'txt') {
+                        updatedField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
+                        // Also set default padding if length is being set and padding isn't
+                        updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                        updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
+                    } else {
+                         // Don't store length if format is not TXT
+                         delete updatedField.length;
+                    }
                 } else if (field === 'order') {
-                    // Order change is handled by moveFieldUp/Down functions
                      console.warn("Changing order directly is disabled. Use move buttons.");
                     return updatedField; // Return unchanged field
                 } else if (field === 'paddingChar') {
-                    updatedField.paddingChar = String(value).slice(0, 1);
+                    // Only store padding char if format is TXT
+                    if (prev.format === 'txt') {
+                         updatedField.paddingChar = String(value).slice(0, 1);
+                     } else {
+                        delete updatedField.paddingChar;
+                    }
                 } else if (field === 'paddingDirection') {
-                    updatedField.paddingDirection = value as PaddingDirection;
+                    // Only store padding direction if format is TXT
+                    if (prev.format === 'txt') {
+                        updatedField.paddingDirection = value as PaddingDirection;
+                    } else {
+                        delete updatedField.paddingDirection;
+                    }
                 } else if (field === 'dateFormat') {
-                     updatedField.dateFormat = value as DateFormat;
+                     // Only store date format if the field is a date type (mapped or calculated)
+                     const currentDataType = getOutputFieldDataType(updatedField);
+                      if (currentDataType === 'Data') {
+                          updatedField.dateFormat = value === NONE_VALUE_PLACEHOLDER ? undefined : value as DateFormat;
+                      } else {
+                          delete updatedField.dateFormat;
+                      }
                 }
                 else {
-                    // Handle changes for static or calculated fields if necessary
                      if (field === 'staticValue' && updatedField.isStatic) {
                          updatedField.staticValue = actualValue;
+                         // Update default padding/length if TXT and value changes
+                         if (prev.format === 'txt') {
+                              updatedField.length = updatedField.length ?? updatedField.staticValue.length ?? 10;
+                              updatedField.paddingChar = updatedField.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                              updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
+                          }
                      } else if (field === 'fieldName' && (updatedField.isStatic || updatedField.isCalculated)) {
                          updatedField.fieldName = actualValue;
                      }
-                    // Add more conditions for calculated fields if needed
                 }
                 return updatedField;
             }
             return f;
         });
 
-        // Sorting is handled by moveFieldUp/Down and initial load/add
-        // newFields.sort((a, b) => a.order - b.order);
-        // const reorderedFields = newFields.map((f, idx) => ({ ...f, order: idx }));
-
-        return { ...prev, fields: newFields }; // Return potentially updated fields without reordering here
+        // Reordering is handled by moveField functions
+        return { ...prev, fields: newFields };
     });
 };
 
@@ -973,7 +1020,8 @@ export default function Home() {
     const newFieldId = availableMappedFields[0]!;
     const correspondingMapping = columnMappings.find(cm => cm.mappedField === newFieldId);
     const dataType = correspondingMapping?.dataType ?? null;
-    const defaultLength = dataType === 'Alfanumérico' ? correspondingMapping?.length : undefined;
+    // Default length only for Alfanumérico in TXT, otherwise undefined initially
+    const defaultLength = (outputConfig.format === 'txt' && dataType === 'Alfanumérico') ? (correspondingMapping?.length ?? 10) : (outputConfig.format === 'txt' ? 10 : undefined);
 
     const newOutputField: OutputFieldConfig = {
         id: `mapped-${newFieldId}-${Date.now()}`,
@@ -982,7 +1030,7 @@ export default function Home() {
         mappedField: newFieldId,
         order: maxOrder + 1,
         ...(outputConfig.format === 'txt' && {
-             length: defaultLength ?? 10,
+             length: defaultLength,
              paddingChar: getDefaultPaddingChar({isStatic: false, isCalculated: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
              paddingDirection: getDefaultPaddingDirection({isStatic: false, isCalculated: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
          }),
@@ -1057,7 +1105,7 @@ export default function Home() {
             fieldId: field.id,
             fieldName: field.fieldName,
             staticValue: field.staticValue,
-            length: String(field.length ?? ''),
+            length: String(field.length ?? ''), // Convert length to string for input
             paddingChar: field.paddingChar ?? getDefaultPaddingChar(field, columnMappings),
             paddingDirection: field.paddingDirection ?? getDefaultPaddingDirection(field, columnMappings),
         });
@@ -1073,29 +1121,36 @@ export default function Home() {
     const saveStaticField = () => {
         const { isEditing, fieldId, fieldName, staticValue, length, paddingChar, paddingDirection } = staticFieldDialogState;
         const len = parseInt(length, 10);
+        const isTxtFormat = outputConfig.format === 'txt';
 
         if (!fieldName.trim()) {
             toast({ title: "Erro", description: "Nome do Campo Estático não pode ser vazio.", variant: "destructive" });
             return;
         }
-        if (outputConfig.format === 'txt' && (isNaN(len) || len <= 0)) {
+        // Validate TXT fields only if format is TXT
+        if (isTxtFormat && (isNaN(len) || len <= 0)) {
             toast({ title: "Erro", description: "Tamanho deve ser um número positivo para formato TXT.", variant: "destructive" });
             return;
         }
-         if (outputConfig.format === 'txt' && (!paddingChar || paddingChar.length !== 1)) {
+         if (isTxtFormat && (!paddingChar || paddingChar.length !== 1)) {
             toast({ title: "Erro", description: "Caractere de Preenchimento deve ser um único caractere para TXT.", variant: "destructive" });
             return;
         }
 
-
-        const staticField: OutputFieldConfig = {
-             id: isEditing && fieldId ? fieldId : `static-${Date.now()}`,
+         // Base static field config
+         let staticFieldBase: Omit<OutputFieldConfig, 'id' | 'order'> & { isStatic: true, isCalculated: false } = {
              isStatic: true,
-             isCalculated: false, // Explicitly false
+             isCalculated: false,
              fieldName: fieldName.trim(),
              staticValue: staticValue,
-             order: 0, // Order will be assigned below
-             ...(outputConfig.format === 'txt' && {
+         };
+
+         // Add TXT specific fields conditionally
+         let staticField: OutputFieldConfig = {
+             ...staticFieldBase,
+             id: isEditing && fieldId ? fieldId : `static-${Date.now()}`,
+             order: 0, // Placeholder, will be set below
+             ...(isTxtFormat && {
                 length: len,
                 paddingChar: paddingChar,
                 paddingDirection: paddingDirection,
@@ -1109,18 +1164,22 @@ export default function Home() {
                  const existingFieldIndex = prev.fields.findIndex(f => f.id === fieldId);
                  if (existingFieldIndex === -1) return prev; // Should not happen
                  newFields = [...prev.fields];
-                  const updatedStaticField = { ...staticField, order: prev.fields[existingFieldIndex].order }; // Keep existing order
-                  // Update format-specific fields if format is TXT
-                  if (prev.format === 'txt') {
-                     updatedStaticField.length = len;
-                     updatedStaticField.paddingChar = paddingChar;
-                     updatedStaticField.paddingDirection = paddingDirection;
-                  } else {
-                      // Remove TXT-specific fields if not TXT format
-                      delete updatedStaticField.length;
-                      delete updatedStaticField.paddingChar;
-                      delete updatedStaticField.paddingDirection;
-                  }
+                 // Keep existing order, update other properties
+                  const updatedStaticField = {
+                     ...staticField,
+                     order: prev.fields[existingFieldIndex].order,
+                     // Ensure TXT fields are correctly added/removed based on CURRENT format
+                      ...(prev.format === 'txt' && {
+                          length: len,
+                          paddingChar: paddingChar,
+                          paddingDirection: paddingDirection,
+                      }),
+                     ...(prev.format !== 'txt' && {
+                          length: undefined,
+                          paddingChar: undefined,
+                          paddingDirection: undefined,
+                      })
+                  };
 
                  newFields[existingFieldIndex] = updatedStaticField;
 
@@ -1174,10 +1233,10 @@ export default function Home() {
             type: field.type,
             parameters: { ...field.parameters },
             requiredInputFields: requiredFieldsState,
-            length: String(field.length ?? ''),
+            length: String(field.length ?? ''), // Use string for input
             paddingChar: field.paddingChar ?? getDefaultPaddingChar(field, columnMappings),
             paddingDirection: field.paddingDirection ?? getDefaultPaddingDirection(field, columnMappings),
-            dateFormat: field.dateFormat ?? '',
+            dateFormat: field.dateFormat ?? '', // Use empty string if undefined
         });
     };
 
@@ -1213,6 +1272,11 @@ export default function Home() {
                           newState.dateFormat = 'YYYYMMDD'; // Default for this type
                           newState.paddingDirection = 'right';
                           newState.paddingChar = ' ';
+                          newState.length = '8'; // Default length for YYYYMMDD/DDMMYYYY
+                      } else {
+                          newState.length = ''; // Clear length for other types initially
+                          newState.paddingChar = ' ';
+                          newState.paddingDirection = 'right';
                       }
                  }
                  else {
@@ -1226,6 +1290,7 @@ export default function Home() {
      const saveCalculatedField = () => {
         const { isEditing, fieldId, fieldName, type, parameters, requiredInputFields, length, paddingChar, paddingDirection, dateFormat } = calculatedFieldDialogState;
         const len = parseInt(length, 10);
+        const isTxtFormat = outputConfig.format === 'txt';
 
         if (!fieldName.trim()) {
             toast({ title: "Erro", description: "Nome do Campo Calculado não pode ser vazio.", variant: "destructive" });
@@ -1235,25 +1300,33 @@ export default function Home() {
              toast({ title: "Erro", description: "Selecione o Tipo de Cálculo.", variant: "destructive" });
              return;
          }
-        if (outputConfig.format === 'txt' && (isNaN(len) || len <= 0)) {
+         // Validate TXT fields only if format is TXT
+        if (isTxtFormat && (isNaN(len) || len <= 0)) {
             toast({ title: "Erro", description: "Tamanho deve ser um número positivo para formato TXT.", variant: "destructive" });
             return;
         }
-         if (outputConfig.format === 'txt' && (!paddingChar || paddingChar.length !== 1)) {
+         if (isTxtFormat && (!paddingChar || paddingChar.length !== 1)) {
             toast({ title: "Erro", description: "Caractere de Preenchimento deve ser um único caractere para TXT.", variant: "destructive" });
             return;
         }
-         if (type === 'CalculateStartDate' && !parameters.period) {
-             toast({ title: "Erro", description: "Informe o Período Atual (DD/MM/AAAA) para Calcular Data Inicial.", variant: "destructive" });
-             return;
-         }
-          if (type === 'CalculateStartDate' && !requiredInputFields.parcelasPagas) {
-             toast({ title: "Erro", description: "Selecione o campo mapeado para 'Parcelas Pagas'.", variant: "destructive" });
-             return;
-         }
-          if (type === 'CalculateStartDate' && !dateFormat) {
-             toast({ title: "Erro", description: "Selecione um Formato de Data para a saída.", variant: "destructive" });
-             return;
+         // Specific validation for CalculateStartDate
+         if (type === 'CalculateStartDate') {
+             if (!parameters.period) {
+                 toast({ title: "Erro", description: "Informe o Período Atual (DD/MM/AAAA).", variant: "destructive" });
+                 return;
+             }
+             if (!/^\d{2}\/\d{2}\/\d{4}$/.test(parameters.period) || !isValid(parse(parameters.period, 'dd/MM/yyyy', new Date()))) {
+                  toast({ title: "Erro", description: "Formato inválido para Período Atual. Use DD/MM/AAAA.", variant: "destructive" });
+                 return;
+             }
+             if (!requiredInputFields.parcelasPagas) {
+                 toast({ title: "Erro", description: "Selecione o campo mapeado para 'Parcelas Pagas'.", variant: "destructive" });
+                 return;
+             }
+             if (!dateFormat) {
+                 toast({ title: "Erro", description: "Selecione um Formato de Data para a saída.", variant: "destructive" });
+                 return;
+             }
          }
 
 
@@ -1264,17 +1337,23 @@ export default function Home() {
         }
         // Add more required inputs for other types if needed
 
-         const calculatedField: OutputFieldConfig = {
-             id: isEditing && fieldId ? fieldId : `calc-${type}-${Date.now()}`,
+         const calculatedFieldBase: Omit<OutputFieldConfig, 'id' | 'order'> & { isStatic: false, isCalculated: true } = {
              isStatic: false,
              isCalculated: true,
              fieldName: fieldName.trim(),
              type: type,
              requiredInputFields: requiredInputsArray,
              parameters: { ...parameters },
-             order: 0, // Order will be assigned below
-             ...(type === 'CalculateStartDate' && { dateFormat }), // Only add dateFormat if it's a Date type calculation
-             ...(outputConfig.format === 'txt' && {
+              // Add dateFormat only if applicable (e.g., CalculateStartDate)
+             ...(type === 'CalculateStartDate' && { dateFormat: dateFormat as DateFormat }),
+         };
+
+         // Add TXT specific fields conditionally
+         let calculatedField: OutputFieldConfig = {
+              ...calculatedFieldBase,
+              id: isEditing && fieldId ? fieldId : `calc-${type}-${Date.now()}`,
+              order: 0, // Placeholder
+             ...(isTxtFormat && {
                  length: len,
                  paddingChar: paddingChar,
                  paddingDirection: paddingDirection,
@@ -1288,24 +1367,25 @@ export default function Home() {
                 const existingFieldIndex = prev.fields.findIndex(f => f.id === fieldId);
                 if (existingFieldIndex === -1) return prev; // Should not happen
                 newFields = [...prev.fields];
-                 const updatedCalcField = { ...calculatedField, order: prev.fields[existingFieldIndex].order }; // Keep order
-
-                 // Update format-specific fields
-                 if (prev.format === 'txt') {
-                     updatedCalcField.length = len;
-                     updatedCalcField.paddingChar = paddingChar;
-                     updatedCalcField.paddingDirection = paddingDirection;
-                 } else {
-                     delete updatedCalcField.length;
-                     delete updatedCalcField.paddingChar;
-                     delete updatedCalcField.paddingDirection;
-                 }
-                 // Update date format if applicable
-                 if (type === 'CalculateStartDate') {
-                     updatedCalcField.dateFormat = dateFormat as DateFormat;
-                 } else {
-                     delete updatedCalcField.dateFormat;
-                 }
+                 // Keep existing order, update other properties
+                 const updatedCalcField = {
+                      ...calculatedField,
+                      order: prev.fields[existingFieldIndex].order,
+                      // Ensure TXT fields are correctly added/removed based on CURRENT format
+                      ...(prev.format === 'txt' && {
+                          length: len,
+                          paddingChar: paddingChar,
+                          paddingDirection: paddingDirection,
+                      }),
+                      ...(prev.format !== 'txt' && {
+                          length: undefined,
+                          paddingChar: undefined,
+                          paddingDirection: undefined,
+                      }),
+                      // Ensure date format is correctly added/removed
+                     ...(type === 'CalculateStartDate' && { dateFormat: dateFormat as DateFormat }),
+                      ...(type !== 'CalculateStartDate' && { dateFormat: undefined }),
+                 };
 
                 newFields[existingFieldIndex] = updatedCalcField;
             } else {
@@ -1327,127 +1407,156 @@ export default function Home() {
 
 
  // Effect to initialize/update output fields based on mapped fields and format changes
+ // This effect is complex and aims to preserve user settings (like length/padding) when switching formats.
    useEffect(() => {
-       if (columnMappings.length === 0 && fileData.length === 0 && outputConfig.fields.every(f => !f.isStatic && !f.isCalculated)) return; // Only run if needed
+        if (columnMappings.length === 0 && fileData.length === 0 && outputConfig.fields.every(f => !f.isStatic && !f.isCalculated)) {
+            // Only run if there are mappings, file data, or existing static/calculated fields
+             // If only static/calculated exist, still run to apply format changes
+             if(outputConfig.fields.length === 0) return;
+        }
 
        setOutputConfig(prevConfig => {
-           const existingFieldsMap = new Map(prevConfig.fields.map(f => [f.id, f])); // Use ID as key for uniqueness
+           const existingFieldsMap = new Map(prevConfig.fields.map(f => [f.id, { ...f }])); // Deep copy existing fields
 
-           // Update MAPPED fields based on current mappings and format
-           const potentialMappedFields = columnMappings
+           // Generate potential MAPPED fields based on current mappings
+            const potentialMappedFields = columnMappings
                .filter(m => m.mappedField !== null)
-               .map((m) => {
+               .map((m, index) => {
                    const dataType = m.dataType ?? null;
-                   // Try to find existing field by mappedField ID first (for persistence across format changes)
+                   // Find existing field by mappedField ID first, then by generated ID structure if needed
                    let existingField = prevConfig.fields.find(f => !f.isStatic && !f.isCalculated && f.mappedField === m.mappedField);
-                   const fieldId = existingField?.id ?? `mapped-${m.mappedField!}-${Date.now()}`; // Generate new ID if not found
+                   const fieldId = existingField?.id ?? `mapped-${m.mappedField!}-${Date.now()}`;
 
-                    let baseField: Omit<OutputFieldConfig, 'id' | 'order' | 'isStatic' | 'isCalculated' | 'mappedField'> & { mappedField: string, isStatic: false, isCalculated: false } = {
+                    let baseField: OutputFieldConfig = {
+                       id: fieldId,
+                       order: existingField?.order ?? (prevConfig.fields.length + index), // Maintain or assign order
                        isStatic: false,
                        isCalculated: false,
                        mappedField: m.mappedField!,
-                       length: existingField?.length ?? (dataType === 'Alfanumérico' ? (m.length ?? undefined) : undefined),
-                       paddingChar: existingField?.paddingChar ?? undefined,
-                       paddingDirection: existingField?.paddingDirection ?? undefined,
-                       dateFormat: existingField?.dateFormat ?? (dataType === 'Data' ? 'YYYYMMDD' : undefined),
-                    };
-
-                   if (prevConfig.format === 'txt') {
-                        baseField.length = baseField.length ?? 10;
-                        baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
-                        baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
-                   } else {
-                       // Keep TXT settings unless they were never set (undefined)
-                       if (existingField?.length === undefined) delete baseField.length;
-                       if (existingField?.paddingChar === undefined) delete baseField.paddingChar;
-                       if (existingField?.paddingDirection === undefined) delete baseField.paddingDirection;
-                   }
-                    if (dataType !== 'Data' && existingField?.dateFormat === undefined) {
-                       delete baseField.dateFormat;
-                    } else if (dataType === 'Data') {
-                        baseField.dateFormat = baseField.dateFormat ?? 'YYYYMMDD';
-                    }
-
-
-                   return {
-                        ...baseField,
-                        id: fieldId,
-                        order: existingField?.order ?? (prevConfig.fields.length + columnMappings.findIndex(cm => cm.mappedField === m.mappedField)) // Maintain or assign order
+                       // Preserve existing settings if available, otherwise set defaults based on current format
+                       length: prevConfig.format === 'txt' ? (existingField?.length ?? (dataType === 'Alfanumérico' ? (m.length ?? 10) : 10)) : existingField?.length,
+                       paddingChar: prevConfig.format === 'txt' ? (existingField?.paddingChar ?? getDefaultPaddingChar({isStatic: false, isCalculated: false, mappedField: m.mappedField!, id: '', order: 0 }, columnMappings)) : existingField?.paddingChar,
+                       paddingDirection: prevConfig.format === 'txt' ? (existingField?.paddingDirection ?? getDefaultPaddingDirection({isStatic: false, isCalculated: false, mappedField: m.mappedField!, id: '', order: 0 }, columnMappings)) : existingField?.paddingDirection,
+                       dateFormat: dataType === 'Data' ? (existingField?.dateFormat ?? 'YYYYMMDD') : undefined,
                    };
+
+                    // Clean up TXT fields if format is not TXT
+                    if (prevConfig.format !== 'txt') {
+                        delete baseField.length;
+                        delete baseField.paddingChar;
+                        delete baseField.paddingDirection;
+                    }
+                     // Clean up date format if not a date type
+                     if (dataType !== 'Data') {
+                          delete baseField.dateFormat;
+                     }
+
+                   return baseField;
                });
 
-            // Keep only one entry per mappedField ID
-           const uniqueMappedFields = potentialMappedFields.reduce((acc, current) => {
-               const existingIndex = acc.findIndex(item => !item.isStatic && !item.isCalculated && item.mappedField === current.mappedField);
-                if (existingIndex === -1) {
-                   acc.push(current);
+            // Keep only one entry per mappedField ID, prioritizing existing ones
+           const uniqueMappedFieldsMap = new Map<string, OutputFieldConfig>();
+           prevConfig.fields.forEach(f => {
+               if (!f.isStatic && !f.isCalculated && f.mappedField) {
+                   uniqueMappedFieldsMap.set(f.mappedField, f); // Keep existing first
                }
-               // Decide if update needed (e.g., if mapping details changed) - simple keep first for now
-               return acc;
-           }, [] as (OutputFieldConfig & {isStatic: false, isCalculated: false})[]);
+           });
+           potentialMappedFields.forEach(f => {
+                if (!f.isStatic && !f.isCalculated && f.mappedField && !uniqueMappedFieldsMap.has(f.mappedField)) {
+                   uniqueMappedFieldsMap.set(f.mappedField, f); // Add new if not present
+                } else if (!f.isStatic && !f.isCalculated && f.mappedField && uniqueMappedFieldsMap.has(f.mappedField)) {
+                     // If already present, update with current mapping's derived props if needed (like dateFormat)
+                     const existing = uniqueMappedFieldsMap.get(f.mappedField)!;
+                      const currentMapping = columnMappings.find(cm => cm.mappedField === f.mappedField);
+                      const currentDataType = currentMapping?.dataType ?? null;
+
+                      existing.dateFormat = currentDataType === 'Data' ? (existing.dateFormat ?? 'YYYYMMDD') : undefined;
+                       if (prevConfig.format === 'txt') {
+                           existing.length = existing.length ?? (currentDataType === 'Alfanumérico' ? (currentMapping?.length ?? 10) : 10);
+                           existing.paddingChar = existing.paddingChar ?? getDefaultPaddingChar(existing, columnMappings);
+                           existing.paddingDirection = existing.paddingDirection ?? getDefaultPaddingDirection(existing, columnMappings);
+                       } else {
+                            delete existing.length;
+                            delete existing.paddingChar;
+                            delete existing.paddingDirection;
+                       }
+                        if (currentDataType !== 'Data') {
+                            delete existing.dateFormat;
+                       }
+
+                      uniqueMappedFieldsMap.set(f.mappedField, existing);
+                }
+           });
+           const uniqueMappedFields = Array.from(uniqueMappedFieldsMap.values());
+
 
             // Update STATIC fields based on format
             const updatedStaticFields = prevConfig.fields
                 .filter((f): f is OutputFieldConfig & { isStatic: true } => f.isStatic)
                 .map(f => {
+                    const originalField = existingFieldsMap.get(f.id); // Use original settings from map
+                    let updatedField = { ...f }; // Copy current field
+
                     if (prevConfig.format === 'txt') {
-                        return {
-                            ...f,
-                            length: f.length ?? f.staticValue?.length ?? 10,
-                            paddingChar: f.paddingChar ?? getDefaultPaddingChar(f, columnMappings),
-                            paddingDirection: f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings),
-                        };
+                        updatedField.length = updatedField.length ?? originalField?.length ?? updatedField.staticValue?.length ?? 10;
+                        updatedField.paddingChar = updatedField.paddingChar ?? originalField?.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                        updatedField.paddingDirection = updatedField.paddingDirection ?? originalField?.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
                     } else {
-                         // Remove TXT props if format is not TXT and they weren't originally set
-                         const { length, paddingChar, paddingDirection, ...rest } = f;
-                         const originalField = existingFieldsMap.get(f.id);
-                         return {
-                             ...rest,
-                             ...(originalField?.length !== undefined && { length }),
-                             ...(originalField?.paddingChar !== undefined && { paddingChar }),
-                             ...(originalField?.paddingDirection !== undefined && { paddingDirection }),
-                         };
+                        // Remove TXT props if format is not TXT
+                         delete updatedField.length;
+                         delete updatedField.paddingChar;
+                         delete updatedField.paddingDirection;
                     }
+                    return updatedField;
                 });
 
              // Update CALCULATED fields based on format
             const updatedCalculatedFields = prevConfig.fields
                 .filter((f): f is OutputFieldConfig & { isCalculated: true } => f.isCalculated)
                 .map(f => {
+                    const originalField = existingFieldsMap.get(f.id);
+                    let updatedField = { ...f };
+                    const isDateFieldCalc = updatedField.type === 'CalculateStartDate'; // Add other date types here
+
                     if (prevConfig.format === 'txt') {
-                        return {
-                            ...f,
-                            length: f.length ?? 10, // Default length for calculated
-                            paddingChar: f.paddingChar ?? getDefaultPaddingChar(f, columnMappings),
-                            paddingDirection: f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings),
-                             dateFormat: f.dateFormat ?? (f.type === 'CalculateStartDate' ? 'YYYYMMDD' : undefined), // Ensure dateFormat if needed
-                        };
+                         updatedField.length = updatedField.length ?? originalField?.length ?? (isDateFieldCalc ? 8 : 10); // Default 8 for dates, 10 otherwise
+                         updatedField.paddingChar = updatedField.paddingChar ?? originalField?.paddingChar ?? getDefaultPaddingChar(updatedField, columnMappings);
+                         updatedField.paddingDirection = updatedField.paddingDirection ?? originalField?.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
                     } else {
-                        // Remove TXT props if format is not TXT and they weren't originally set
-                         const { length, paddingChar, paddingDirection, ...rest } = f;
-                         const originalField = existingFieldsMap.get(f.id);
-                         return {
-                             ...rest,
-                              dateFormat: f.dateFormat ?? (f.type === 'CalculateStartDate' ? 'YYYYMMDD' : undefined), // Ensure dateFormat if needed
-                             ...(originalField?.length !== undefined && { length }),
-                             ...(originalField?.paddingChar !== undefined && { paddingChar }),
-                             ...(originalField?.paddingDirection !== undefined && { paddingDirection }),
-                         };
+                         // Remove TXT props if format is not TXT
+                         delete updatedField.length;
+                         delete updatedField.paddingChar;
+                         delete updatedField.paddingDirection;
                     }
+                     // Ensure dateFormat if it's a date calculation type
+                    if (isDateFieldCalc) {
+                        updatedField.dateFormat = updatedField.dateFormat ?? originalField?.dateFormat ?? 'YYYYMMDD';
+                    } else {
+                         delete updatedField.dateFormat; // Remove if not a date calc type
+                    }
+                    return updatedField;
                 });
 
 
-            // Combine all field types
+            // Combine all field types: existing static, existing calculated, unique mapped
             let combinedFields: OutputFieldConfig[] = [
                ...updatedStaticFields,
                ...updatedCalculatedFields,
                ...uniqueMappedFields
            ];
 
-            // Filter out mapped fields whose mapping was removed
-            combinedFields = combinedFields.filter(field =>
-               field.isStatic || field.isCalculated || columnMappings.some(cm => cm.mappedField === field.mappedField)
-           );
+            // Filter out mapped fields whose original column mapping was removed
+             combinedFields = combinedFields.filter(field =>
+                field.isStatic || field.isCalculated ||
+                columnMappings.some(cm => cm.mappedField === field.mappedField)
+            );
+            // Filter out calculated fields whose required input mapping was removed
+             combinedFields = combinedFields.filter(field =>
+                !field.isCalculated ||
+                field.requiredInputFields.every(reqId =>
+                     columnMappings.some(cm => cm.mappedField === reqId)
+                 )
+            );
 
 
            // Sort and renumber order
@@ -1455,21 +1564,20 @@ export default function Home() {
            const reorderedFinalFields = combinedFields.map((f, idx) => ({ ...f, order: idx }));
 
 
-            // Check if the final fields array has actually changed
+            // Check if the final fields array has actually changed (deep comparison might be needed for accuracy)
             const hasChanged = JSON.stringify(prevConfig.fields) !== JSON.stringify(reorderedFinalFields);
 
            if (hasChanged) {
-                console.log("Output fields updated:", reorderedFinalFields);
+                console.log("Output fields updated due to mapping/format change:", reorderedFinalFields);
                return {
                    ...prevConfig,
                    fields: reorderedFinalFields
                };
            } else {
-                console.log("No changes to output fields.");
                return prevConfig; // No change, return previous config
            }
        });
-   }, [columnMappings, fileData.length, outputConfig.format]); // Depend on fileData.length to trigger on new file
+   }, [columnMappings, fileData.length, outputConfig.format]); // Depend on mappings, file load, and format change
 
 
     // --- Calculate Field Value ---
@@ -1553,7 +1661,7 @@ export default function Home() {
              duration: 10000, // Longer duration for error message
          });
          setIsProcessing(false);
-         setActiveTab("config"); // Go back to config tab
+         setActiveTab("mapping"); // Go back to mapping tab if inputs are missing
          return;
      }
 
@@ -1566,42 +1674,46 @@ export default function Home() {
      if (outputConfig.fields.length === 0) {
          toast({ title: "Erro", description: "Configure os campos de saída antes de converter.", variant: "destructive" });
         setIsProcessing(false);
+        setActiveTab("config"); // Go back to config tab
         return;
     }
 
     const mappedOutputFields = outputConfig.fields.filter(f => !f.isStatic && !f.isCalculated);
-    const requiredMappings = columnMappings.filter(m => mappedOutputFields.some(f => !f.isStatic && !f.isCalculated && f.mappedField === m.mappedField));
-
     const usedMappedFields = new Set(mappedOutputFields.map(f => f.mappedField));
     const mappingsUsedInOutput = columnMappings.filter(m => m.mappedField && usedMappedFields.has(m.mappedField));
 
+    // Check if all MAPPED fields used in output have a data type selected
     if (mappingsUsedInOutput.some(m => !m.dataType)) {
-        toast({ title: "Erro", description: "Defina o 'Tipo' para todos os campos mapeados usados na saída.", variant: "destructive" });
+        toast({ title: "Erro", description: "Defina o 'Tipo' para todos os campos mapeados usados na saída (Aba 2).", variant: "destructive", duration: 7000 });
         setIsProcessing(false);
+        setActiveTab("mapping"); // Go back to mapping tab
         return;
     }
+    // Check TXT specific fields
      if (outputConfig.format === 'txt' && outputConfig.fields.some(f => (f.length === undefined || f.length === null || f.length <= 0) )) {
-        toast({ title: "Erro", description: "Defina um 'Tamanho' válido (> 0) para todos os campos na saída TXT.", variant: "destructive" });
+        toast({ title: "Erro", description: "Defina um 'Tamanho' válido (> 0) para todos os campos na saída TXT (Aba 3).", variant: "destructive", duration: 7000 });
         setIsProcessing(false);
+        setActiveTab("config");
         return;
     }
       if (outputConfig.format === 'txt' && outputConfig.fields.some(f => !f.paddingChar || f.paddingChar.length !== 1)) {
-         toast({ title: "Erro", description: "Defina um 'Caractere de Preenchimento' válido (1 caractere) para todos os campos na saída TXT.", variant: "destructive" });
+         toast({ title: "Erro", description: "Defina um 'Caractere de Preenchimento' válido (1 caractere) para todos os campos na saída TXT (Aba 3).", variant: "destructive", duration: 7000 });
          setIsProcessing(false);
+         setActiveTab("config");
          return;
      }
+     // Check CSV specific fields
      if (outputConfig.format === 'csv' && (!outputConfig.delimiter || outputConfig.delimiter.length === 0)) {
-        toast({ title: "Erro", description: "Defina um 'Delimitador' para a saída CSV.", variant: "destructive" });
+        toast({ title: "Erro", description: "Defina um 'Delimitador' para a saída CSV (Aba 3).", variant: "destructive", duration: 7000 });
         setIsProcessing(false);
+        setActiveTab("config");
         return;
     }
     // Check date format for both mapped 'Data' fields and calculated fields that output dates
-    if (outputConfig.fields.some(f =>
-        ((!f.isStatic && !f.isCalculated && columnMappings.find(cm => cm.mappedField === f.mappedField)?.dataType === 'Data') ||
-         (f.isCalculated && f.type === 'CalculateStartDate')) && // Add other date-outputting calc types here
-        !f.dateFormat)) {
-        toast({ title: "Erro", description: "Selecione um 'Formato Data' para todos os campos do tipo Data (mapeados ou calculados) na saída.", variant: "destructive" });
+    if (outputConfig.fields.some(f => getOutputFieldDataType(f) === 'Data' && !f.dateFormat)) {
+        toast({ title: "Erro", description: "Selecione um 'Formato Data' para todos os campos do tipo Data (mapeados ou calculados) na saída (Aba 3).", variant: "destructive", duration: 7000 });
         setIsProcessing(false);
+        setActiveTab("config");
         return;
     }
 
@@ -1617,7 +1729,7 @@ export default function Home() {
         sortedOutputFields.forEach((outputField, fieldIndex) => {
           let value = '';
           let mapping: ColumnMapping | undefined;
-          let dataType: DataType | null = null;
+          let dataType: DataType | 'Calculado' | null = null; // Include 'Calculado'
           let originalValue: any = null;
 
           if (outputField.isStatic) {
@@ -1630,24 +1742,20 @@ export default function Home() {
           } else if (outputField.isCalculated) {
              value = calculateFieldValue(outputField, row);
              originalValue = `Calculado: ${value}`; // For logging/debugging
-             // Determine dataType based on calculation type for formatting
-             if (outputField.type === 'CalculateStartDate') {
-                 dataType = 'Data';
-             } else {
-                 dataType = 'Alfanumérico'; // Default for unknown/other calc types
-             }
-             // Use specified dateFormat for calculated date fields
+             dataType = getOutputFieldDataType(outputField); // Get type (e.g., 'Data' or 'Calculado')
+
+             // Validate/format calculated dates based on dateFormat
              const dateFormat = outputField.dateFormat;
              if (dataType === 'Data' && value && dateFormat) {
-                 // The calculateFieldValue should already return the formatted string
-                 // This block might be redundant if calculateFieldValue handles formatting
                  try {
-                     // Attempt to parse the already formatted value just to validate
-                     const parsedCalcDate = parse(value, dateFormat === 'YYYYMMDD' ? 'yyyyMMdd' : 'ddMMyyyy', new Date());
+                     // Assume calculateFieldValue already formatted it correctly.
+                     // We might just validate it here if needed.
+                      const testParseFormat = dateFormat === 'YYYYMMDD' ? 'yyyyMMdd' : 'ddMMyyyy';
+                      const parsedCalcDate = parse(value, testParseFormat, new Date());
                      if (!isValid(parsedCalcDate)) {
-                          console.warn(`Valor calculado de data '${value}' parece inválido para o formato ${dateFormat}.`);
+                          console.warn(`Valor calculado de data '${value}' parece inválido para o formato ${dateFormat}. Gerando vazio.`);
+                           value = '';
                      }
-                     // Value is already formatted by calculateFieldValue
                  } catch (e) {
                      console.error(`Erro ao re-validar data calculada ${value}`, e);
                      value = ''; // Clear invalid calculated date
@@ -1656,14 +1764,21 @@ export default function Home() {
 
           } else { // Mapped field
              mapping = columnMappings.find(m => m.mappedField === outputField.mappedField);
-             if (!mapping || !mapping.originalHeader || !fileData || fileData.length === 0) {
-                 if(fileData && fileData.length > 0) console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
-                 value = '';
-             } else {
+             if (!mapping || !mapping.originalHeader) { // Check mapping exists
+                 if(fileData && fileData.length > 0 && mapping?.mappedField) { // Log warning only if data exists and field was supposed to be mapped
+                     console.warn(`Mapeamento ou cabeçalho original não encontrado para o campo de saída: ${outputField.mappedField}`);
+                 }
+                 value = ''; // Ensure value is empty string if no mapping/header
+             } else if (!(mapping.originalHeader in row) && fileData && fileData.length > 0) {
+                  console.warn(`Cabeçalho original "${mapping.originalHeader}" não encontrado na linha de dados para o campo mapeado: ${outputField.mappedField}.`);
+                  value = ''; // Header exists in mapping but not in this row
+             }
+              else {
                  originalValue = row[mapping.originalHeader] ?? '';
                  value = String(originalValue).trim();
                  dataType = mapping.dataType;
 
+                  // Apply removeMask based on mapping setting
                   if (mapping.removeMask && dataType && value) {
                       value = removeMaskHelper(value, dataType);
                   }
@@ -1673,25 +1788,43 @@ export default function Home() {
                       case 'CPF':
                       case 'CNPJ':
                       case 'Inteiro':
-                            if (!mapping.removeMask && value) value = value.replace(/\D/g, '');
+                            // If removeMask wasn't checked but it's a numeric type, ensure only digits remain
+                           if (!mapping.removeMask && value) {
+                                value = value.replace(/\D/g, '');
+                            }
                            break;
                       case 'Numérico':
-                            const numStr = value.replace(',', '.');
+                            // Enhanced numeric parsing
+                             let numStr = value;
+                             // If removeMask wasn't checked, remove currency symbols and spaces first
+                             if (!mapping.removeMask) {
+                                 numStr = numStr.replace(/[R$ ]/g, '');
+                             }
+                             // Standardize decimal separator to '.' for parsing
+                             numStr = numStr.replace(',', '.');
+
+                             // Handle potential multiple dots (keep only the last one)
+                             const parts = numStr.split('.');
+                             if (parts.length > 2) {
+                                 numStr = parts.slice(0, -1).join('') + '.' + parts[parts.length - 1];
+                             }
+
                             const numMatch = numStr.match(/^(-?\d+\.?\d*)|(^-?\.\d+)/);
 
                             if (numMatch && numMatch[0]) {
                                 let numVal = parseFloat(numMatch[0]);
                                 if (isNaN(numVal)) {
-                                    value = '0.00';
+                                    value = '0.00'; // Default if parsing fails
                                 } else {
-                                    value = numVal.toFixed(2);
+                                    value = numVal.toFixed(2); // Ensure 2 decimal places
                                 }
-                            } else if (value === '0' || value === '') {
+                            } else if (value === '' || value === '0' || value === '-') {
+                                // Handle cases where input is empty, zero, or just a minus sign
                                 value = '0.00';
                             }
                              else {
-                                 console.warn(`Could not parse numeric value: ${originalValue} (processed: ${value}). Defaulting to 0.00`);
-                                value = '0.00';
+                                 console.warn(`Não foi possível analisar valor numérico: ${originalValue} (processado: ${value}). Usando 0.00`);
+                                value = '0.00'; // Fallback for unparseable non-empty strings
                             }
                           break;
                        case 'Data':
@@ -1699,51 +1832,65 @@ export default function Home() {
                                 let parsedDate: Date | null = null;
                                 let cleanedValue = value;
 
-                                if (mapping?.removeMask && value) { // Use removeMask setting
+                                // Apply removeMask if checked OR if it wasn't checked but we need to clean it anyway for parsing
+                                // Let's prioritize the removeMask setting, but also clean common separators if not checked.
+                                if (mapping?.removeMask && value) {
                                     cleanedValue = value.replace(/[^\d]/g, '');
+                                } else if (value) {
+                                     // Basic cleaning if mask removal is off, helps parsing
+                                     cleanedValue = value.replace(/[-/.]/g, '');
                                 }
 
-                                let year = '', month = '', day = '';
+
+                                const dateStringForParsing = String(originalValue).trim(); // Use original for robust parsing
+                                const outputDateFormat = outputField.dateFormat || 'YYYYMMDD'; // Required format
 
                                 // --- Enhanced Date Parsing ---
                                 // Try ISO format first (YYYY-MM-DD)
-                                if (/^\d{4}-\d{2}-\d{2}/.test(String(originalValue))) {
-                                     parsedDate = parse(String(originalValue).substring(0, 10), 'yyyy-MM-dd', new Date());
+                                if (/^\d{4}-\d{2}-\d{2}/.test(dateStringForParsing)) {
+                                     parsedDate = parse(dateStringForParsing.substring(0, 10), 'yyyy-MM-dd', new Date());
                                 }
 
                                 // Try common formats if ISO fails or not present
                                 if (!parsedDate || !isValid(parsedDate)) {
-                                    const dateString = String(originalValue).trim();
                                     const commonFormats = [
                                         'dd/MM/yyyy', 'd/M/yyyy', 'dd-MM-yyyy', 'd-M-yyyy',
                                         'MM/dd/yyyy', 'M/d/yyyy', 'MM-dd-yyyy', 'M-d-yyyy',
                                         'yyyy/MM/dd', 'yyyy/M/d', 'yyyy-MM-dd', 'yyyy-M-d',
-                                        'dd/MM/yy', 'd/M/yy', 'dd-MM-yy', 'd-M-yy',
+                                        'dd/MM/yy', 'd/M/yy', 'dd-MM-yy', 'd-M-yy', // Short year formats
                                         'MM/dd/yy', 'M/d/yy', 'MM-dd-yy', 'M-d-yy',
-                                        'yyyyMMdd', // Added unseparated formats
-                                        'ddMMyyyy'
+                                        'yyyyMMdd', // Numeric formats
+                                        'ddMMyyyy',
+                                        'yyMMdd',   // Numeric short year
+                                        'ddMMyy'
                                     ];
                                     for (const fmt of commonFormats) {
-                                        parsedDate = parse(dateString, fmt, new Date());
+                                        parsedDate = parse(dateStringForParsing, fmt, new Date());
                                         if (isValid(parsedDate)) break; // Found a valid format
                                     }
                                 }
 
-                                // Handle purely numeric strings (cleaned value)
+                                // Handle purely numeric strings (cleaned value) if parsing failed
+                                // Useful if removeMask was true or original was like 20240115
                                 if ((!parsedDate || !isValid(parsedDate)) && cleanedValue && /^\d+$/.test(cleanedValue)) {
-                                    if (cleanedValue.length === 8) {
-                                         // Try YYYYMMDD and DDMMYYYY
-                                         parsedDate = parse(cleanedValue, 'yyyyMMdd', new Date());
-                                         if (!isValid(parsedDate)) {
-                                             parsedDate = parse(cleanedValue, 'ddMMyyyy', new Date());
-                                         }
-                                    } else if (cleanedValue.length === 6) {
-                                         // Try YYMMDD and DDMMYY (assume 20xx/19xx based on year)
-                                         parsedDate = parse(cleanedValue, 'yyMMdd', new Date());
+                                     if (cleanedValue.length === 8) {
+                                         // Try YYYYMMDD and DDMMYYYY based on required output format preference
+                                          const fmt1 = outputDateFormat === 'YYYYMMDD' ? 'yyyyMMdd' : 'ddMMyyyy';
+                                          const fmt2 = outputDateFormat === 'YYYYMMDD' ? 'ddMMyyyy' : 'yyyyMMdd';
+                                          parsedDate = parse(cleanedValue, fmt1, new Date());
                                           if (!isValid(parsedDate)) {
-                                             parsedDate = parse(cleanedValue, 'ddMMyy', new Date());
-                                         }
-                                    }
+                                              parsedDate = parse(cleanedValue, fmt2, new Date());
+                                          }
+                                     } else if (cleanedValue.length === 6) {
+                                         // Try YYMMDD and DDMMYY (assume 20xx/19xx based on year)
+                                         // Prefer format based on output, e.g., YYMMDD if output is YYYYMMDD
+                                          const fmt1 = outputDateFormat === 'YYYYMMDD' ? 'yyMMdd' : 'ddMMyy';
+                                          const fmt2 = outputDateFormat === 'YYYYMMDD' ? 'ddMMyy' : 'yyMMdd';
+                                          parsedDate = parse(cleanedValue, fmt1, new Date());
+                                          if (!isValid(parsedDate)) {
+                                              parsedDate = parse(cleanedValue, fmt2, new Date());
+                                          }
+                                     }
                                 }
 
 
@@ -1752,12 +1899,10 @@ export default function Home() {
                                      const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
                                      const d = String(parsedDate.getDate()).padStart(2, '0');
 
-                                    const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Default if not set
-
-                                     value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
+                                     value = outputDateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
                                 } else if (value) { // If parsing failed but there was input
-                                    console.warn(`Não foi possível analisar a data: ${originalValue}. Gerando vazio.`);
-                                    value = '';
+                                    console.warn(`Não foi possível analisar a data: ${originalValue} (limpo: ${cleanedValue}). Gerando vazio.`);
+                                    value = ''; // Set to empty if parsing fails
                                 } else { // If input was empty
                                     value = '';
                                 }
@@ -1769,6 +1914,7 @@ export default function Home() {
                             break;
                       case 'Alfanumérico':
                       default:
+                          // No specific processing needed, masking handled above
                           break;
                  }
              }
@@ -1780,43 +1926,31 @@ export default function Home() {
              const len = outputField.length ?? 0;
              const padChar = outputField.paddingChar || getDefaultPaddingChar(outputField, columnMappings);
              const padDir = outputField.paddingDirection || getDefaultPaddingDirection(outputField, columnMappings);
-             let processedValue = String(value ?? '');
-             let effectiveDataType = dataType; // Use mapped/guessed type
-              if (outputField.isStatic) {
-                  // Refine type guess for static fields for padding
-                  effectiveDataType = /^-?\d+$/.test(outputField.staticValue) ? 'Inteiro' : /^-?\d+(\.|,)\d+$/.test(outputField.staticValue) ? 'Numérico' : 'Alfanumérico';
-              } else if (outputField.isCalculated) {
-                   // Use the determined type for calculated fields
-                   effectiveDataType = dataType; // dataType was set based on calc type
-              }
+             let processedValue = String(value ?? ''); // Ensure it's a string
 
+             // Determine the effective data type for padding logic
+             let effectiveDataType = getOutputFieldDataType(outputField);
+             if(outputField.isStatic) { // Refine for static
+                 effectiveDataType = /^-?\d+$/.test(outputField.staticValue) ? 'Inteiro' : /^-?\d+(\.\d+)?$/.test(outputField.staticValue.replace(',', '.')) ? 'Numérico' : 'Alfanumérico';
+             }
 
              if (len > 0) {
+                  // 1. Truncate if longer than len
                  if (processedValue.length > len) {
                       console.warn(`Truncando valor "${processedValue}" para o campo ${outputField.isStatic ? outputField.fieldName : outputField.isCalculated ? outputField.fieldName : outputField.mappedField} pois excede o tamanho ${len}`);
-                       // Numeric left-padding truncation needs special handling for sign
-                      if (padDir === 'left' && (effectiveDataType === 'Numérico' || effectiveDataType === 'Inteiro' )) {
-                          const isNegative = processedValue.startsWith('-');
-                          const absValue = isNegative ? processedValue.substring(1) : processedValue;
-                           const targetLength = isNegative ? len - 1 : len; // Account for sign
-
-                           if (targetLength <= 0) { // If length is too small even for the sign
-                               processedValue = isNegative ? '-' : '';
-                               if (processedValue.length > len) processedValue = processedValue.substring(0, len); // Should not happen, but safeguard
-                           } else {
-                               // Truncate from the LEFT (most significant digits) for numeric right alignment
-                               const truncatedAbs = absValue.substring(absValue.length - targetLength);
-                               processedValue = isNegative ? '-' + truncatedAbs : truncatedAbs;
-                           }
-
-                      } else { // Truncate from the RIGHT for text or right-padded numbers
+                       // Truncate from the LEFT (most significant digits) for numeric right alignment (left padding)
+                      if (padDir === 'left' && (effectiveDataType === 'Numérico' || effectiveDataType === 'Inteiro')) {
+                           processedValue = processedValue.slice(-len); // Take the last 'len' characters
+                      } else { // Truncate from the RIGHT for text or left-aligned numbers (right padding)
                          processedValue = processedValue.substring(0, len);
                       }
+                 }
 
-                 } else if (processedValue.length < len) {
+                 // 2. Pad if shorter than len
+                 if (processedValue.length < len) {
                      const padLen = len - processedValue.length;
                      if (padDir === 'left') {
-                          // Handle negative numbers with '0' padding correctly
+                          // Special handling for negative numbers with '0' padding: '-' then zeros then number
                          if (processedValue.startsWith('-') && padChar === '0') {
                              processedValue = '-' + padChar.repeat(padLen) + processedValue.substring(1);
                          } else {
@@ -1826,25 +1960,20 @@ export default function Home() {
                          processedValue = processedValue + padChar.repeat(padLen);
                      }
                  }
-                  // Final length check after padding/truncation (especially for negative number padding)
-                  if (processedValue.length > len) {
-                       console.warn(`Re-truncando valor "${processedValue}" para o tamanho ${len} após preenchimento/tratamento de sinal.`);
-                       if (padDir === 'left') {
-                           processedValue = processedValue.slice(-len); // Take the rightmost characters
-                       } else {
-                            processedValue = processedValue.slice(0, len); // Take the leftmost characters
-                       }
 
-                  } else if (processedValue.length < len && padDir === 'left') {
-                      // Ensure left padding didn't miss anything (e.g., if initial value was empty)
-                       processedValue = padChar.repeat(len - processedValue.length) + processedValue;
+                  // 3. Final length check (especially after padding negative numbers)
+                  if (processedValue.length > len) {
+                       console.warn(`Re-truncando valor "${processedValue}" para o tamanho ${len} após preenchimento.`);
+                       if (padDir === 'left' && (effectiveDataType === 'Numérico' || effectiveDataType === 'Inteiro')) {
+                           processedValue = processedValue.slice(-len);
+                       } else {
+                            processedValue = processedValue.slice(0, len);
+                       }
                   }
 
-
-             } else { // len <= 0
+             } else { // len <= 0 should ideally not happen due to validation, but handle defensively
                  processedValue = '';
              }
-
 
              line += processedValue;
 
@@ -1854,10 +1983,12 @@ export default function Home() {
             }
              let csvValue = String(value ?? '');
              // Convert decimal separator for CSV if numeric
-              if ((dataType === 'Numérico') || (outputField.isStatic && /^-?\d+(\.|,)\d+$/.test(outputField.staticValue))) {
-                    csvValue = csvValue.replace('.', ',');
+             const effectiveDataType = getOutputFieldDataType(outputField);
+              if (effectiveDataType === 'Numérico') {
+                    csvValue = csvValue.replace('.', ','); // Use comma for CSV decimal
               }
 
+             // Quote if necessary
              const needsQuotes = csvValue.includes(outputConfig.delimiter!) || csvValue.includes('"') || csvValue.includes('\n');
              if (needsQuotes) {
                 csvValue = `"${csvValue.replace(/"/g, '""')}"`;
@@ -1880,6 +2011,8 @@ export default function Home() {
         description: error.message || "Ocorreu um erro inesperado durante a conversão.",
         variant: "destructive",
       });
+       // Stay on config tab if conversion fails
+       setActiveTab("config");
     } finally {
       setIsProcessing(false);
       setProcessingMessage('Processando...');
@@ -1888,7 +2021,8 @@ export default function Home() {
 
    const openDownloadDialog = () => {
         if (!convertedData) return;
-        const proposed = `${fileName.split('.').slice(0, -1).join('.')}_convertido.${outputConfig.format}`;
+        const baseFileName = fileName ? fileName.split('.').slice(0, -1).join('.') : 'arquivo';
+        const proposed = `${baseFileName}_convertido.${outputConfig.format}`;
         setDownloadDialogState({
             isOpen: true,
             proposedFilename: proposed,
@@ -1906,7 +2040,16 @@ export default function Home() {
 
    const confirmDownload = () => {
         const { finalFilename } = downloadDialogState;
-        if (!convertedData || !finalFilename) return;
+        if (!convertedData || !finalFilename.trim()) {
+            toast({ title: "Erro", description: "Nome do arquivo não pode ser vazio.", variant: "destructive" });
+            return;
+        }
+
+        const cleanFilename = finalFilename.trim();
+        const finalFilenameWithExt = cleanFilename.endsWith(`.${outputConfig.format}`)
+            ? cleanFilename
+            : `${cleanFilename}.${outputConfig.format}`;
+
 
         const encoding = outputConfig.encoding.toLowerCase(); // Use encoding from config
         const mimeType = outputConfig.format === 'txt'
@@ -1920,7 +2063,7 @@ export default function Home() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = finalFilename.endsWith(`.${outputConfig.format}`) ? finalFilename : `${finalFilename}.${outputConfig.format}`;
+        link.download = finalFilenameWithExt; // Use cleaned and extension-added filename
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -1994,9 +2137,7 @@ export default function Home() {
         setOutputConfig(config); // Load the selected config into the main state
         setConfigManagementDialogState({ isOpen: false, action: null, configName: '', selectedConfigToLoad: null });
         toast({ title: "Sucesso", description: `Configuração "${config.name}" carregada.` });
-        // Optionally, trigger re-evaluation based on loaded config?
-         // Re-run the effect that depends on columnMappings and format
-         // This might need adjustment based on how the effect is structured.
+        // The useEffect hook observing outputConfig.format and columnMappings will handle field updates.
     };
 
     const deleteConfig = (configNameToDelete: string) => {
@@ -2061,7 +2202,7 @@ export default function Home() {
                          </SelectItem>
                      ))
                  ) : (
-                      <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>Nenhum campo mapeado</SelectItem>
+                      <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>Nenhum campo mapeado disponível</SelectItem> // Improved message
                  )}
              </SelectContent>
          </Select>
@@ -2082,8 +2223,7 @@ export default function Home() {
 
  // --- Render ---
   return (
-    // Placeholder for Login/Dashboard - Render based on auth state later
-    // For now, directly render the conversion tool
+    // NOTE: This renders the converter directly. Login/Dashboard are placeholders/deferred.
     <div className="container mx-auto p-4 md:p-8 flex flex-col items-center min-h-screen bg-background">
       <Card className="w-full max-w-5xl shadow-lg">
         <CardHeader className="text-center">
@@ -2092,8 +2232,10 @@ export default function Home() {
           </CardTitle>
           <CardDescription className="text-muted-foreground">
             Converta seus arquivos Excel ou PDF(em teste) para layouts TXT ou CSV personalizados.
-             {/* Placeholder for future dashboard link */}
-            {/* <Button variant="link" onClick={() => alert('Ir para o Painel (Funcionalidade Futura)')}>Painel</Button> */}
+            <br />
+             <span className="text-xs italic flex items-center justify-center mt-1">
+               <Info className="w-3 h-3 mr-1" /> Seus dados não são armazenados, garantindo conformidade com a LGPD.
+             </span>
           </CardDescription>
         </CardHeader>
 
@@ -2204,9 +2346,9 @@ export default function Home() {
                                                  <Button variant="ghost" size="icon" className="ml-1 h-6 w-6 text-muted-foreground cursor-help align-middle"><HelpCircle className="h-4 w-4" /></Button>
                                             </TooltipTrigger>
                                             <TooltipContent>
-                                                <p>Opcional. Define o tamanho máx.</p>
-                                                <p>Usado para definir o tamanho na saída TXT.</p>
-                                                <p>(Ignorado para tipos não-Alfanuméricos).</p>
+                                                <p>Tamanho máx. para campos Alfanuméricos.</p>
+                                                <p>Usado para definir o tamanho padrão na saída TXT.</p>
+                                                <p>(Ignorado para outros tipos).</p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
@@ -2219,9 +2361,10 @@ export default function Home() {
                                                  <Button variant="ghost" size="icon" className="ml-1 h-6 w-6 text-muted-foreground cursor-help align-middle"><HelpCircle className="h-4 w-4" /></Button>
                                             </TooltipTrigger>
                                             <TooltipContent>
-                                                <p>Remove caracteres não numéricos/separadores.</p>
-                                                <p>Útil para CPF, CNPJ, Data, Numérico etc.</p>
-                                                 <p>(Padrão: Ativado para tipos relevantes)</p>
+                                                <p>Remove caracteres não numéricos/separadores</p>
+                                                <p>antes do processamento para certos tipos.</p>
+                                                <p>(Ex: CPF, CNPJ, Data, Numérico, Inteiro, RG)</p>
+                                                 <p>(Padrão: Ativado para esses tipos)</p>
                                             </TooltipContent>
                                         </Tooltip>
                                     </TooltipProvider>
@@ -2269,7 +2412,7 @@ export default function Home() {
                                          <Select
                                            value={mapping.dataType || NONE_VALUE_PLACEHOLDER}
                                            onValueChange={(value) => handleMappingChange(index, 'dataType', value)}
-                                           disabled={isProcessing || !mapping.mappedField}
+                                           disabled={isProcessing || !mapping.mappedField} // Disable if not mapped
                                          >
                                            <SelectTrigger className="text-xs h-8">
                                              <SelectValue placeholder="Tipo (Obrigatório se mapeado)" />
@@ -2290,14 +2433,14 @@ export default function Home() {
                                            onChange={(e) => handleMappingChange(index, 'length', e.target.value)}
                                            placeholder="Tam."
                                            className="w-full text-xs h-8"
-                                           disabled={isProcessing || !mapping.dataType || mapping.dataType !== 'Alfanumérico'}
+                                           disabled={isProcessing || !mapping.dataType || mapping.dataType !== 'Alfanumérico'} // Only enable for Alfanumérico
                                          />
                                        </TableCell>
                                         <TableCell className="text-center">
                                           <Switch
                                               checked={mapping.removeMask}
                                               onCheckedChange={(checked) => handleMappingChange(index, 'removeMask', checked)}
-                                              disabled={isProcessing || !mapping.dataType || mapping.dataType === 'Alfanumérico'}
+                                              disabled={isProcessing || !mapping.dataType || mapping.dataType === 'Alfanumérico'} // Disable for Alfanumérico
                                               aria-label={`Remover máscara para ${mapping.originalHeader}`}
                                               className="scale-75"
                                           />
@@ -2368,7 +2511,7 @@ export default function Home() {
                                                              variant="ghost"
                                                              size="icon"
                                                              onClick={() => removePredefinedField(field.id)}
-                                                             disabled={isProcessing} // Allow removing any field now
+                                                             disabled={isProcessing || field.isCore} // Disable removing core fields
                                                              className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50 disabled:cursor-not-allowed"
                                                              aria-label={`Remover campo ${field.name}`}
                                                          >
@@ -2376,7 +2519,10 @@ export default function Home() {
                                                          </Button>
                                                     </TooltipTrigger>
                                                    <TooltipContent>
-                                                         <p>Remover campo "{field.name}"</p>
+                                                        {field.isCore
+                                                           ? <p>Não é possível remover campos principais originais.</p>
+                                                           : <p>Remover campo "{field.name}"</p>
+                                                        }
                                                    </TooltipContent>
                                                 </Tooltip>
                                             </TooltipProvider>
@@ -2560,8 +2706,6 @@ export default function Home() {
                                          </TableHeader>
                                          <TableBody>
                                              {outputConfig.fields.map((field, index) => {
-                                                 // const mapping = !field.isStatic ? columnMappings.find(cm => cm.mappedField === field.mappedField) : undefined;
-                                                 // const dataType = mapping?.dataType ?? null;
                                                  const dataType = getOutputFieldDataType(field);
                                                  const isDateField = dataType === 'Data';
                                                  const fieldNameDisplay = field.isStatic ? `${field.fieldName} (Estático)`
@@ -2571,15 +2715,6 @@ export default function Home() {
                                                  return (
                                                  <TableRow key={field.id}>
                                                       <TableCell className="flex items-center gap-1">
-                                                         {/* <Input
-                                                             type="number"
-                                                             min="0"
-                                                             value={field.order}
-                                                             onChange={(e) => handleOutputFieldChange(field.id, 'order', e.target.value)}
-                                                             className="w-14 h-8 text-xs"
-                                                             disabled={isProcessing}
-                                                             aria-label={`Ordem do campo ${fieldNameDisplay}`}
-                                                         /> */}
                                                          <span className="text-xs w-6 text-center">{index + 1}</span>
                                                          <div className='flex flex-col'>
                                                             <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => moveField(field.id, 'up')} disabled={isProcessing || index === 0} aria-label="Mover para cima">
@@ -2924,7 +3059,7 @@ export default function Home() {
                              checked={predefinedFieldDialogState.isPersistent}
                              onCheckedChange={(checked) => handlePredefinedFieldDialogChange('isPersistent', Boolean(checked))}
                              aria-label="Marcar como Campo Principal"
-                             // disabled={predefinedFields.find(f => f.id === predefinedFieldDialogState.fieldId)?.isCore} // Core fields are always persistent
+                             disabled={predefinedFields.find(f => f.id === predefinedFieldDialogState.fieldId)?.isCore} // Core fields are always persistent
                          />
                          <Label htmlFor="predefined-persist" className="cursor-pointer">
                              Campo Principal (Manter para futuras conversões)
@@ -2937,6 +3072,7 @@ export default function Home() {
                                    <TooltipContent>
                                        <p>Campos Principais são salvos no seu navegador e ficam disponíveis para todas as conversões.</p>
                                        <p>Campos Opcionais são usados apenas nesta conversão.</p>
+                                       <p>(Campos originais são sempre Principais).</p>
                                    </TooltipContent>
                                </Tooltip>
                            </TooltipProvider>
@@ -3098,7 +3234,7 @@ export default function Home() {
                                          onChange={(e) => handleCalculatedFieldDialogChange('paddingChar', e.target.value)}
                                          className="text-center"
                                          required
-                                          placeholder={getDefaultPaddingChar({ isCalculated: true, id: '', order: 0, type: 'CalculateStartDate', fieldName: '', requiredInputFields: [] }, columnMappings)} // Example placeholder
+                                          placeholder={getDefaultPaddingChar({ isCalculated: true, id: '', order: 0, type: calculatedFieldDialogState.type || 'CalculateStartDate', fieldName: '', requiredInputFields: [] }, columnMappings)}
                                      />
                                  </div>
                                  <div className="space-y-2">
@@ -3142,21 +3278,23 @@ export default function Home() {
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                    <div className="space-y-2">
-                        <Label htmlFor="download-filename">Nome do Arquivo</Label>
+                        <Label htmlFor="download-filename">Nome do Arquivo*</Label>
                         <Input
                             id="download-filename"
                             value={downloadDialogState.finalFilename}
                             onChange={handleDownloadFilenameChange}
                             placeholder="Nome do arquivo de saída"
+                            required
                         />
                    </div>
-                    <p className="text-xs text-muted-foreground">A extensão (.txt ou .csv) será adicionada automaticamente.</p>
+                    <p className="text-xs text-muted-foreground">A extensão (.txt ou .csv) será adicionada automaticamente se ausente.</p>
+                    <p className="text-xs text-muted-foreground">* Nome do arquivo é obrigatório.</p>
                 </div>
                 <DialogFooter>
                     <DialogClose asChild>
                         <Button type="button" variant="outline">Cancelar</Button>
                     </DialogClose>
-                    <Button type="button" onClick={confirmDownload} disabled={!downloadDialogState.finalFilename}>Confirmar Download</Button>
+                    <Button type="button" onClick={confirmDownload} disabled={!downloadDialogState.finalFilename.trim()}>Confirmar Download</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -3200,17 +3338,19 @@ export default function Home() {
                                      <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
                                      {savedConfigs.map(config => (
                                           <SelectItem key={config.name} value={config.name!}>
-                                              {config.name}
-                                             {/* Add delete button here maybe? Or in a separate manage screen */}
-                                              <Button
-                                                  variant="ghost"
-                                                  size="icon"
-                                                  className="h-5 w-5 ml-2 text-destructive hover:bg-destructive/10 float-right"
-                                                  onClick={(e) => { e.stopPropagation(); deleteConfig(config.name!); }}
-                                                  aria-label={`Excluir modelo ${config.name}`}
-                                              >
-                                                  <Trash2 className="h-3 w-3"/>
-                                              </Button>
+                                             <div className="flex justify-between items-center w-full">
+                                                  <span>{config.name}</span>
+                                                  <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-5 w-5 ml-2 text-destructive hover:bg-destructive/10 shrink-0"
+                                                      onPointerDown={(e) => e.stopPropagation()} // Prevent select close on button click
+                                                      onClick={(e) => { e.stopPropagation(); deleteConfig(config.name!); }}
+                                                      aria-label={`Excluir modelo ${config.name}`}
+                                                  >
+                                                      <Trash2 className="h-3 w-3"/>
+                                                  </Button>
+                                              </div>
                                          </SelectItem>
                                      ))}
                                      {savedConfigs.length === 0 && <SelectItem value="no-configs" disabled>Nenhum modelo salvo.</SelectItem>}
