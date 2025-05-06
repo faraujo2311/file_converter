@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,7 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"; // Import Popover
 
 
-// NOTE (v1.1.0): Full authentication, RBAC, admin panel, user-specific backend storage,
+// NOTE (v1.2.0): Full authentication, RBAC, admin panel, user-specific backend storage,
 // captcha, IP logging, session management features, LGPD compliance measures (beyond disclaimer),
 // and draggable reordering requested for v1.1.0 are DEFERRED.
 // These features require significant backend architecture changes (e.g., adding Firebase Auth/Firestore)
@@ -42,6 +42,7 @@ type PredefinedField = {
     isCore: boolean; // True for original, hardcoded fields
     comment?: string;
     isPersistent?: boolean; // Tracks if a custom field is saved in localStorage
+    group?: string; // For grouping in select dropdowns
 };
 type ColumnMapping = {
   originalHeader: string;
@@ -143,24 +144,56 @@ type ConfigManagementDialogState = {
     selectedConfigToLoad: string | null;
 }
 
+const PREDEFINED_FIELD_GROUPS = {
+    PADRAO: "Padrão",
+    MARGEM: "Margem",
+    HISTORICO_RETORNO: "Histórico/Retorno",
+    CUSTOM: "Personalizado" // For user-added fields not fitting other groups
+};
+
 
 const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
-  { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.', isPersistent: true }, // Core fields are always persistent conceptually
-  { id: 'cpf', name: 'CPF', isCore: true, comment: 'Cadastro de Pessoa Física. Será formatado sem máscara na saída se a opção estiver marcada.', isPersistent: true },
-  { id: 'rg', name: 'RG', isCore: true, comment: 'Registro Geral (Identidade). Pode conter letras e números.', isPersistent: true },
-  { id: 'nome', name: 'Nome', isCore: true, comment: 'Nome completo.', isPersistent: true },
-  { id: 'email', name: 'E-mail', isCore: true, comment: 'Endereço de e-mail.', isPersistent: true },
-  { id: 'cnpj', name: 'CNPJ', isCore: true, comment: 'Cadastro Nacional da Pessoa Jurídica. Será formatado sem máscara na saída se a opção estiver marcada.', isPersistent: true },
-  { id: 'regime', name: 'Regime', isCore: true, comment: 'Regime de contratação (ex: CLT, Estatutário).', isPersistent: true },
-  { id: 'situacao', name: 'Situação', isCore: true, comment: 'Situação funcional (ex: Ativo, Inativo).', isPersistent: true },
-  { id: 'categoria', name: 'Categoria', isCore: true, comment: 'Categoria funcional.', isPersistent: true },
-  { id: 'secretaria', name: 'Secretaria', isCore: true, comment: 'Secretaria ou órgão de lotação.', isPersistent: true },
-  { id: 'setor', name: 'Setor', isCore: true, comment: 'Setor ou departamento específico.', isPersistent: true },
-  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).', isPersistent: true },
-  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).', isPersistent: true },
-  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).', isPersistent: true },
-  { id: 'parcelas_pagas', name: 'Parcelas Pagas', isCore: true, comment: 'Número de parcelas pagas de um contrato/empréstimo (Inteiro).', isPersistent: true }, // Added PARCELAS_PAGAS
-].map(f => ({ ...f, isPersistent: true })); // Ensure all core fields are marked as persistent
+  { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'cpf', name: 'CPF', isCore: true, comment: 'Cadastro de Pessoa Física. Será formatado sem máscara na saída se a opção estiver marcada.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'rg', name: 'RG', isCore: true, comment: 'Registro Geral (Identidade). Pode conter letras e números.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'nome', name: 'Nome', isCore: true, comment: 'Nome completo.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'email', name: 'E-mail', isCore: true, comment: 'Endereço de e-mail.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'cnpj', name: 'CNPJ', isCore: true, comment: 'Cadastro Nacional da Pessoa Jurídica. Será formatado sem máscara na saída se a opção estiver marcada.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'regime', name: 'Regime', isCore: true, comment: 'Regime de contratação (ex: CLT, Estatutário).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'situacao', name: 'Situação', isCore: true, comment: 'Situação funcional (ex: Ativo, Inativo).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'categoria', name: 'Categoria', isCore: true, comment: 'Categoria funcional.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'secretaria', name: 'Secretaria', isCore: true, comment: 'Secretaria ou órgão de lotação.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'setor', name: 'Setor', isCore: true, comment: 'Setor ou departamento específico.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'parcelas_pagas', name: 'Parcelas Pagas', isCore: true, comment: 'Número de parcelas pagas de um contrato/empréstimo (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  // New fields for v1.2.0
+  { id: 'data_nascimento', name: 'Data de Nascimento', isCore: true, comment: 'Data de nascimento (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'data_admissao', name: 'Data de Admissão', isCore: true, comment: 'Data de admissão (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'data_fim_contrato', name: 'Data Fim do Contrato', isCore: true, comment: 'Data de término do contrato (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'sinal_margem', name: 'Sinal da Margem', isCore: true, comment: 'Sinal indicador da margem (+ ou -) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'estabelecimento_empresa', name: 'Estabelecimento/Empresa', isCore: true, comment: 'Nome do estabelecimento ou empresa (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'orgao_filial', name: 'Órgão/Filial', isCore: true, comment: 'Nome do órgão ou filial (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.PADRAO },
+  { id: 'verba_rubrica', name: 'Verba/Rubrica', isCore: true, comment: 'Código ou descrição da verba/rubrica (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'prazo_total', name: 'Prazo Total', isCore: true, comment: 'Prazo total do contrato em meses/parcelas (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'parcelas_restantes', name: 'Parcelas Restantes', isCore: true, comment: 'Número de parcelas restantes de um contrato/empréstimo (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'valor_parcela', name: 'Valor da Parcela', isCore: true, comment: 'Valor da parcela do contrato/empréstimo (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'valor_financiado', name: 'Valor Financiado', isCore: true, comment: 'Valor total financiado (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'cet_mensal', name: 'CET Mensal', isCore: true, comment: 'Custo Efetivo Total mensal (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'cet_anual', name: 'CET Anual', isCore: true, comment: 'Custo Efetivo Total anual (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'numero_contrato', name: 'Número do Contrato', isCore: true, comment: 'Número identificador do contrato (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'verba_rubrica_ferias', name: 'Verba/Rubrica Férias', isCore: true, comment: 'Código ou descrição da verba/rubrica de férias (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'valor_previsto', name: 'Valor Previsto', isCore: true, comment: 'Valor previsto para uma determinada transação/evento (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'valor_realizado', name: 'Valor Realizado', isCore: true, comment: 'Valor efetivamente realizado (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'observacao', name: 'Observação', isCore: true, comment: 'Campo para observações gerais (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'situacao_parcela', name: 'Situação Parcela', isCore: true, comment: 'Situação de uma parcela (ex: Paga, Aberta, Vencida) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'periodo', name: 'Período', isCore: true, comment: 'Período de referência (Data).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'identificador', name: 'Identificador', isCore: true, comment: 'Identificador único (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'indice', name: 'Índice', isCore: true, comment: 'Índice aplicado (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
+  { id: 'situacao_usuario', name: 'Situação do usuário', isCore: true, comment: 'Situação cadastral do usuário (ex: Ativo, Bloqueado) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+  { id: 'tempo_casa', name: 'Tempo de casa', isCore: true, comment: 'Tempo de serviço na empresa (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
+].map(f => ({ ...f, isPersistent: true })).sort((a, b) => a.name.localeCompare(b.name));
 
 
 const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Data', 'CPF', 'CNPJ'];
@@ -168,8 +201,8 @@ const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252
 const DATE_FORMATS: DateFormat[] = ['YYYYMMDD', 'DDMMYYYY'];
 
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
-const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields-v1'; // Updated storage key
-const SAVED_CONFIGS_STORAGE_KEY = 'sca-saved-configs-v1'; // Storage key for saved configurations
+const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields-v1.2'; // Updated storage key for version
+const SAVED_CONFIGS_STORAGE_KEY = 'sca-saved-configs-v1.2'; // Storage key for saved configurations
 
 
 // Helper to check if a data type is numeric-like
@@ -301,7 +334,7 @@ export default function Home() {
     const [savedConfigs, setSavedConfigs] = useState<OutputConfig[]>([]); // State for saved configurations
 
 
-  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '1.1.0'; // Set current version
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '1.2.0'; // Set current version
 
    // Load predefined fields and saved configurations from localStorage on mount
    useEffect(() => {
@@ -317,7 +350,8 @@ export default function Home() {
                         name: f.name,
                         isCore: false,
                         comment: f.comment || '',
-                        isPersistent: true // Fields from storage are persistent
+                        isPersistent: true, // Fields from storage are persistent
+                        group: f.group || PREDEFINED_FIELD_GROUPS.CUSTOM, // Assign to custom group if not specified
                     }));
            } catch (e) {
                console.error("Falha ao analisar campos pré-definidos do localStorage:", e);
@@ -331,7 +365,8 @@ export default function Home() {
                combined.push(cf);
            }
        });
-       setPredefinedFields(combined);
+       setPredefinedFields(combined.sort((a, b) => a.name.localeCompare(b.name)));
+
 
         // Load Saved Configurations
         const storedConfigsJson = localStorage.getItem(SAVED_CONFIGS_STORAGE_KEY);
@@ -460,7 +495,31 @@ export default function Home() {
           'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
           'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
           'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'],
-          'parcelas_pagas': ['parcelas pagas', 'parc pagas', 'qtd parcelas pagas', 'parc'], // Added guess for parcelas_pagas
+          'parcelas_pagas': ['parcelas pagas', 'parc pagas', 'qtd parcelas pagas', 'parc', 'num parc pagas'],
+          'data_nascimento': ['data nascimento', 'dt nasc', 'nascimento'],
+          'data_admissao': ['data admissao', 'dt adm', 'admissao'],
+          'data_fim_contrato': ['data fim contrato', 'dt fim', 'termino contrato'],
+          'sinal_margem': ['sinal margem', 'sinal'],
+          'estabelecimento_empresa': ['estabelecimento', 'empresa', 'razao social'],
+          'orgao_filial': ['orgao', 'filial', 'unid adm'],
+          'verba_rubrica': ['verba', 'rubrica', 'cod verba', 'cod rubrica', 'evento'],
+          'prazo_total': ['prazo total', 'total parcelas', 'num parcelas', 'qtd parcelas'],
+          'parcelas_restantes': ['parcelas restantes', 'parc restantes', 'saldo parcelas'],
+          'valor_parcela': ['valor parcela', 'vlr parc', 'prestacao'],
+          'valor_financiado': ['valor financiado', 'vlr financ', 'principal'],
+          'cet_mensal': ['cet mensal', 'taxa mes', 'juros mes'],
+          'cet_anual': ['cet anual', 'taxa ano', 'juros ano'],
+          'numero_contrato': ['numero contrato', 'nr contrato', 'contrato', 'operacao'],
+          'verba_rubrica_ferias': ['verba ferias', 'rubrica ferias'],
+          'valor_previsto': ['valor previsto', 'vlr prev', 'orcado'],
+          'valor_realizado': ['valor realizado', 'vlr real', 'efetivo'],
+          'observacao': ['observacao', 'obs', 'detalhes', 'complemento'],
+          'situacao_parcela': ['situacao parcela', 'status parc'],
+          'periodo': ['periodo', 'competencia', 'mes ref', 'data ref'],
+          'identificador': ['identificador', 'id', 'codigo', 'chave'],
+          'indice': ['indice', 'fator', 'indexador'],
+          'situacao_usuario': ['situacao usuario', 'status usuario', 'estado usuario'],
+          'tempo_casa': ['tempo de casa', 'antiguidade'],
       };
 
       for (const fieldId in guesses) {
@@ -481,12 +540,12 @@ export default function Home() {
        // Priority based on header keywords
       if (lowerHeader.includes('cnpj')) return 'CNPJ';
       if (lowerHeader.includes('cpf')) return 'CPF';
-      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
-      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Numérico';
-       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id') || lowerHeader.includes('parcela') ) return 'Inteiro'; // Added parcela for Inteiro
-      if (lowerHeader.includes('rg')) return 'Alfanumérico';
-       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico';
-       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao') || lowerHeader.includes('cargo') || lowerHeader.includes('funcao')) return 'Alfanumérico';
+      if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc') || lowerHeader.includes('periodo') || lowerHeader.includes('admissao') || lowerHeader.includes('fim contrato')) return 'Data';
+      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad') || lowerHeader.includes('financ') || lowerHeader.includes('cet') || lowerHeader.includes('parcela')) return 'Numérico';
+       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id') || lowerHeader.includes('prazo') || lowerHeader.includes('parcelas')) return 'Inteiro';
+      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG can have letters
+       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Typically numeric but might be integer
+       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao') || lowerHeader.includes('cargo') || lowerHeader.includes('funcao') || lowerHeader.includes('sinal') || lowerHeader.includes('estab') || lowerHeader.includes('empresa') || lowerHeader.includes('filial') || lowerHeader.includes('verba') || lowerHeader.includes('rubrica') || lowerHeader.includes('contrato') || lowerHeader.includes('identificador') || lowerHeader.includes('indice') || lowerHeader.includes('tempo')) return 'Alfanumérico';
 
       // Guess based on sample data content if header wasn't decisive
        if (stringSample) {
@@ -835,7 +894,8 @@ export default function Home() {
                   ...originalField,
                   name: trimmedName,
                   comment: comment || '',
-                  isPersistent: isPersistent // Update persistence based on checkbox
+                  isPersistent: isPersistent, // Update persistence based on checkbox
+                  group: originalField.group || PREDEFINED_FIELD_GROUPS.CUSTOM, // Retain original group or assign to custom
                };
 
               updatedFields = predefinedFields.map(f =>
@@ -849,13 +909,14 @@ export default function Home() {
                   name: trimmedName,
                   comment: comment || '',
                   isCore: false, // New fields are never core
-                  isPersistent: isPersistent // Set persistence based on checkbox
+                  isPersistent: isPersistent, // Set persistence based on checkbox
+                  group: PREDEFINED_FIELD_GROUPS.CUSTOM, // New custom fields go to custom group
               };
               updatedFields = [...predefinedFields, fieldToUpdateOrAdd];
               fieldDescription += ` adicionado com ID "${newId}" (${isPersistent ? 'Principal' : 'Opcional'}).`;
           }
 
-        setPredefinedFields(updatedFields);
+        setPredefinedFields(updatedFields.sort((a, b) => a.name.localeCompare(b.name)));
         saveCustomPredefinedFields(updatedFields); // Save all potentially updated fields (including changes in persistence)
         setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', isPersistent: false, comment: '' });
         toast({ title: "Sucesso", description: fieldDescription });
@@ -873,7 +934,8 @@ export default function Home() {
     // }
 
      const updatedFields = predefinedFields.filter(f => f.id !== idToRemove);
-    setPredefinedFields(updatedFields);
+    setPredefinedFields(updatedFields.sort((a, b) => a.name.localeCompare(b.name)));
+
 
     // Update mappings that used this field
     setColumnMappings(prev => prev.map(m => m.mappedField === idToRemove ? { ...m, mappedField: null } : m));
@@ -2167,30 +2229,29 @@ export default function Home() {
         toast({ title: "Sucesso", description: `Configuração "${configNameToDelete}" excluída.` });
     };
 
-  // Memoized list of predefined fields available for mapping dropdowns
-  const memoizedPredefinedFields = useMemo(() => {
-      return [...predefinedFields] // Create a copy before sorting
-          .sort((a, b) => {
-              // Prioritize core fields, then sort alphabetically
-              if (a.isCore && !b.isCore) return -1;
-              if (!a.isCore && b.isCore) return 1;
-              return a.name.localeCompare(b.name);
-          });
-  }, [predefinedFields]);
+    // Memoized and grouped list of predefined fields for dropdowns
+    const groupedPredefinedFields = useMemo(() => {
+        const groups: Record<string, PredefinedField[]> = {};
+        const sortedFields = [...predefinedFields].sort((a,b) => a.name.localeCompare(b.name));
+
+        sortedFields.forEach(field => {
+            const groupName = field.group || PREDEFINED_FIELD_GROUPS.CUSTOM;
+            if (!groups[groupName]) {
+                groups[groupName] = [];
+            }
+            groups[groupName].push(field);
+        });
+        return Object.entries(groups)
+            .sort(([groupA], [groupB]) => { // Optional: Sort groups themselves if needed
+                 const order = [PREDEFINED_FIELD_GROUPS.PADRAO, PREDEFINED_FIELD_GROUPS.MARGEM, PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO, PREDEFINED_FIELD_GROUPS.CUSTOM];
+                 return order.indexOf(groupA) - order.indexOf(groupB);
+            });
+    }, [predefinedFields]);
 
 
  // Render helper for Output Field selection for MAPPED fields
  const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig & { isStatic: false, isCalculated: false }) => {
      const currentFieldMappedId = currentField.mappedField;
-     const availableOptions = memoizedPredefinedFields
-         .filter(pf =>
-             columnMappings.some(cm => cm.mappedField === pf.id) // Only show fields that are actually mapped in step 2
-         )
-         .filter(pf =>
-              pf.id === currentFieldMappedId || // Allow selecting the current field
-              !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id) // Filter out fields already used in OTHER output slots
-          );
-
 
      return (
          <Select
@@ -2203,15 +2264,25 @@ export default function Home() {
              </SelectTrigger>
              <SelectContent>
                  <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
-                 {availableOptions.length > 0 ? (
-                     availableOptions.map(field => (
-                         <SelectItem key={field.id} value={field.id}>
-                             {field.name}
-                         </SelectItem>
-                     ))
-                 ) : (
-                      <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>Nenhum campo mapeado disponível</SelectItem> // Improved message
-                 )}
+                 {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
+                    <SelectGroup key={groupName}>
+                        <SelectLabel>{groupName}</SelectLabel>
+                        {fieldsInGroup
+                            .filter(pf => columnMappings.some(cm => cm.mappedField === pf.id)) // Only show fields actually mapped
+                            .filter(pf => pf.id === currentFieldMappedId || !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id)) // Allow current or unused
+                            .map(field => (
+                            <SelectItem key={field.id} value={field.id}>
+                                {field.name}
+                            </SelectItem>
+                        ))}
+                    </SelectGroup>
+                 ))}
+                  {/* Check if there are any available options at all */}
+                 {!groupedPredefinedFields.flatMap(([,fields]) => fields)
+                    .filter(pf => columnMappings.some(cm => cm.mappedField === pf.id))
+                    .some(pf => pf.id === currentFieldMappedId || !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id))
+                    && <SelectItem value="no-options" disabled>Nenhum campo mapeado disponível</SelectItem>
+                 }
              </SelectContent>
          </Select>
      );
@@ -2399,11 +2470,16 @@ export default function Home() {
                                                      <SelectValue placeholder="Selecione ou deixe em branco" />
                                                    </SelectTrigger>
                                                    <SelectContent>
-                                                     <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
-                                                     {memoizedPredefinedFields.map(field => (
-                                                       <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
-                                                     ))}
-                                                   </SelectContent>
+                                                        <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
+                                                        {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
+                                                            <SelectGroup key={groupName}>
+                                                                <SelectLabel>{groupName}</SelectLabel>
+                                                                {fieldsInGroup.map(field => (
+                                                                    <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
+                                                                ))}
+                                                            </SelectGroup>
+                                                        ))}
+                                                    </SelectContent>
                                                  </Select>
                                                  {mappedFieldDetails?.comment && (
                                                       <TooltipProvider>
@@ -2468,7 +2544,9 @@ export default function Home() {
                   <Card>
                      <CardHeader>
                          <CardTitle className="text-xl">Gerenciar Campos Pré-definidos</CardTitle>
-                         <CardDescription>Adicione, edite ou remova campos para o mapeamento. Campos Principais são mantidos para futuras conversões.</CardDescription>
+                         <CardDescription>
+                           Adicione, edite ou remova campos para o mapeamento. Campos Principais são fixos; campos adicionais são temporários e descartados ao atualizar a página.
+                         </CardDescription>
                      </CardHeader>
                       <CardContent>
                          <div className="flex justify-end mb-4">
@@ -2477,70 +2555,75 @@ export default function Home() {
                              </Button>
                          </div>
                          <div className="space-y-2 max-h-40 overflow-y-auto border rounded p-2 bg-secondary/30">
-                              {memoizedPredefinedFields.map(field => (
-                                 <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0 gap-2">
-                                     <div className="flex items-center gap-1 flex-wrap flex-grow">
-                                         <span className="text-sm font-medium">{field.name}</span>
-                                         <span className="text-xs text-muted-foreground">({field.id})</span>
-                                          {/* Display "Principal" or "Opcional" */}
-                                          <span className={`ml-1 text-xs ${field.isPersistent ? 'text-green-600 font-semibold' : 'text-yellow-600'}`}>
-                                             ({field.isPersistent ? 'Principal' : 'Opcional'})
-                                           </span>
-                                          {field.comment && (
+                              {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
+                                <div key={groupName} className="mb-2">
+                                  <h3 className="text-sm font-semibold text-muted-foreground mb-1 sticky top-0 bg-secondary/50 p-1 rounded -mx-1">{groupName}</h3>
+                                  {fieldsInGroup.map(field => (
+                                     <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0 gap-2">
+                                         <div className="flex items-center gap-1 flex-wrap flex-grow">
+                                             <span className="text-sm font-medium">{field.name}</span>
+                                             <span className="text-xs text-muted-foreground">({field.id})</span>
+                                              {/* Display "Principal" or "Opcional" */}
+                                              <span className={`ml-1 text-xs ${field.isPersistent ? 'text-green-600 font-semibold' : 'text-yellow-600'}`}>
+                                                 ({field.isPersistent ? 'Principal' : 'Opcional'})
+                                               </span>
+                                              {field.comment && (
+                                                   <TooltipProvider>
+                                                      <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <HelpCircle className="h-3 w-3 inline-block ml-1 text-muted-foreground cursor-help" />
+                                                            </TooltipTrigger>
+                                                            <TooltipContent><p>{field.comment}</p></TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+                                               )}
+                                         </div>
+                                         <div className="flex gap-1 flex-shrink-0">
                                                <TooltipProvider>
-                                                  <Tooltip>
+                                                   <Tooltip>
+                                                       <TooltipTrigger asChild>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                onClick={() => openEditPredefinedFieldDialog(field)}
+                                                                disabled={isProcessing}
+                                                                className="h-7 w-7 text-muted-foreground hover:text-accent"
+                                                                aria-label={`Editar campo ${field.name}`}
+                                                            >
+                                                                <Edit className="h-4 w-4" />
+                                                            </Button>
+                                                       </TooltipTrigger>
+                                                       <TooltipContent><p>Editar "{field.name}"</p></TooltipContent>
+                                                   </Tooltip>
+                                               </TooltipProvider>
+                                               <TooltipProvider>
+                                                    <Tooltip>
                                                         <TooltipTrigger asChild>
-                                                            <HelpCircle className="h-3 w-3 inline-block ml-1 text-muted-foreground cursor-help" />
+                                                             <Button
+                                                                 variant="ghost"
+                                                                 size="icon"
+                                                                 onClick={() => removePredefinedField(field.id)}
+                                                                 disabled={isProcessing || field.isCore} // Disable removing core fields
+                                                                 className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50 disabled:cursor-not-allowed"
+                                                                 aria-label={`Remover campo ${field.name}`}
+                                                             >
+                                                                 <Trash2 className="h-4 w-4" />
+                                                             </Button>
                                                         </TooltipTrigger>
-                                                        <TooltipContent><p>{field.comment}</p></TooltipContent>
+                                                       <TooltipContent>
+                                                            {field.isCore
+                                                               ? <p>Não é possível remover campos principais originais.</p>
+                                                               : <p>Remover campo "{field.name}"</p>
+                                                            }
+                                                       </TooltipContent>
                                                     </Tooltip>
                                                 </TooltipProvider>
-                                           )}
+                                           </div>
                                      </div>
-                                     <div className="flex gap-1 flex-shrink-0">
-                                           <TooltipProvider>
-                                               <Tooltip>
-                                                   <TooltipTrigger asChild>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            onClick={() => openEditPredefinedFieldDialog(field)}
-                                                            disabled={isProcessing}
-                                                            className="h-7 w-7 text-muted-foreground hover:text-accent"
-                                                            aria-label={`Editar campo ${field.name}`}
-                                                        >
-                                                            <Edit className="h-4 w-4" />
-                                                        </Button>
-                                                   </TooltipTrigger>
-                                                   <TooltipContent><p>Editar "{field.name}"</p></TooltipContent>
-                                               </Tooltip>
-                                           </TooltipProvider>
-                                           <TooltipProvider>
-                                                <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                         <Button
-                                                             variant="ghost"
-                                                             size="icon"
-                                                             onClick={() => removePredefinedField(field.id)}
-                                                             disabled={isProcessing || field.isCore} // Disable removing core fields
-                                                             className="h-7 w-7 text-muted-foreground hover:text-destructive disabled:text-muted-foreground/50 disabled:cursor-not-allowed"
-                                                             aria-label={`Remover campo ${field.name}`}
-                                                         >
-                                                             <Trash2 className="h-4 w-4" />
-                                                         </Button>
-                                                    </TooltipTrigger>
-                                                   <TooltipContent>
-                                                        {field.isCore
-                                                           ? <p>Não é possível remover campos principais originais.</p>
-                                                           : <p>Remover campo "{field.name}"</p>
-                                                        }
-                                                   </TooltipContent>
-                                                </Tooltip>
-                                            </TooltipProvider>
-                                       </div>
-                                 </div>
+                                 ))}
+                                </div>
                              ))}
-                             {memoizedPredefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo pré-definido encontrado.</p>}
+                             {groupedPredefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo pré-definido encontrado.</p>}
                          </div>
                       </CardContent>
                        <CardFooter className="flex justify-end">
