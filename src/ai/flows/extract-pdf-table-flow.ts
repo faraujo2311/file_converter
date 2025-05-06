@@ -51,18 +51,39 @@ const prompt = ai.definePrompt({
     schema: ExtractPdfTableInputSchema,
   },
   output: {
+    // Request JSON output explicitly, describing the desired structure.
+    format: 'json',
     schema: ExtractPdfTableOutputSchema,
   },
-  prompt: `Analyze the provided PDF document, which contains tabular data. Extract the main table content.
+  prompt: `Analyze the provided PDF document, which contains tabular data. Your goal is to extract the main table content accurately.
 
 PDF Document: {{media url=pdfDataUri}}
 
-Identify the table headers accurately.
-Extract all data rows corresponding to these headers.
-Ensure the data in each row aligns correctly with the identified headers.
-Return the extracted data in the specified JSON format with 'headers' as an array of strings and 'rows' as an array of objects, where each object maps header names to cell values. If an object structure is difficult, an array of values per row, matching the header order, is acceptable.
+Instructions:
+1.  **Identify Headers:** Accurately identify the table headers. Handle multi-line headers if present.
+2.  **Extract Rows:** Extract all data rows corresponding to the identified headers.
+3.  **Align Data:** Ensure the data in each row aligns correctly with the headers. Handle merged cells if possible, otherwise note potential issues in data alignment.
+4.  **Data Types:** Extract numeric values, dates, and text as accurately as possible, preserving their original format from the PDF.
+5.  **Focus:** Concentrate on the primary data table. Ignore surrounding text unless it's clearly part of the table structure (e.g., footnotes linked within cells).
+6.  **Output Format:** Return the extracted data STRICTLY in the following JSON format:
+    \`\`\`json
+    {
+      "headers": ["Header1", "Header2", ...],
+      "rows": [
+        // Option 1: Array of Objects (Preferred)
+        { "Header1": "Value1A", "Header2": "Value2A", ... },
+        { "Header1": "Value1B", "Header2": "Value2B", ... },
+        // Option 2: Array of Arrays (Acceptable fallback if object structure is difficult)
+        // ["Value1A", "Value2A", ...],
+        // ["Value1B", "Value2B", ...],
+      ],
+      "error": "Optional error message if extraction fails or is unreliable."
+    }
+    \`\`\`
+    Use the array of objects format for 'rows' whenever possible. Use the array of arrays format ONLY if mapping headers to values precisely is too complex. The order of values in the array MUST match the order of the 'headers' array.
+7.  **Error Handling:** If you cannot reliably extract a table or encounter significant issues, return empty arrays for 'headers' and 'rows', and provide a clear explanation in the 'error' field. Do not invent data.
 
-If you cannot reliably extract a table, return empty arrays for headers and rows and provide an explanation in the 'error' field. Focus on the primary data table, ignoring surrounding text unless it's part of the table structure. Pay close attention to multi-line headers or cells if they exist. Handle merged cells appropriately if possible, otherwise note potential issues. Extract numeric values and dates as accurately as possible, preserving their original format from the PDF.
+Review your extracted headers and the first few rows carefully to ensure accuracy and correct alignment before generating the final JSON output.
 `,
 });
 
@@ -74,31 +95,50 @@ const extractPdfTableFlow = ai.defineFlow<
     name: 'extractPdfTableFlow',
     inputSchema: ExtractPdfTableInputSchema,
     outputSchema: ExtractPdfTableOutputSchema,
-     // Use a model capable of multimodal input
-    model: 'googleai/gemini-1.5-flash',
-    // Increase max output tokens if needed for large tables
-    // maxOutputTokens: 4096, // Example
-    // Increase timeout if processing takes longer
-    // requestConfig: { timeout: 120 }, // Example: 120 seconds
+     // Use a model capable of multimodal input and JSON output
+    model: 'googleai/gemini-1.5-flash', // Keep using 1.5 Flash as it's generally good for this
+     // Adjust config for potentially longer processing and larger output
+    // maxOutputTokens: 4096, // Consider increasing if tables are very large
+    // requestConfig: { timeout: 180 }, // Increase timeout to 3 minutes
+    // Set temperature to 0 for more deterministic output, crucial for structured data
+     generationConfig: { temperature: 0 },
   },
   async input => {
      console.log('Calling AI model for PDF extraction...');
     try {
-        const {output} = await prompt(input);
-        console.log('AI model response received:', output);
+        // Pass the input directly to the prompt function
+        const response = await prompt(input);
+        const output = response?.output; // Access output from the response object
+
+        console.log('AI model raw response:', response); // Log the full response for debugging
+        console.log('AI model extracted output:', output);
+
          if (!output) {
            console.error('AI model returned undefined output.');
            return { headers: [], rows: [], error: 'AI model returned no output.' };
          }
-         // Basic validation
-         if (!output.headers || !output.rows) {
-            console.warn('AI model output missing headers or rows:', output);
-            return { headers: [], rows: [], error: output.error || 'AI model returned incomplete data (missing headers or rows).' };
+
+         // Basic validation: Check if headers and rows exist and are arrays
+         if (!Array.isArray(output.headers) || !Array.isArray(output.rows)) {
+            console.warn('AI model output missing headers/rows arrays or incorrect type:', output);
+             // Try to provide a more specific error based on what's missing
+             let errorMsg = output.error || 'AI model returned incomplete data.';
+             if (!Array.isArray(output.headers)) errorMsg += ' Headers are missing or not an array.';
+             if (!Array.isArray(output.rows)) errorMsg += ' Rows are missing or not an array.';
+            return { headers: [], rows: [], error: errorMsg.trim() };
          }
+
+         // Optional: Add more specific validation (e.g., check row structure consistency) if needed
+
         return output;
     } catch(e: any) {
-        console.error("Error during AI PDF extraction prompt call:", e);
-        return { headers: [], rows: [], error: `AI processing error: ${e.message || 'Unknown error'}` };
+        console.error("Error during AI PDF extraction flow execution:", e);
+         // Try to capture more specific error details if available
+         let errorMessage = `AI processing error: ${e.message || 'Unknown error'}`;
+         if (e.cause) {
+           errorMessage += ` Cause: ${e.cause}`;
+         }
+        return { headers: [], rows: [], error: errorMessage };
     }
   }
 );

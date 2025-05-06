@@ -540,16 +540,17 @@ export default function Home() {
          } else if (fileToProcess.type === 'application/pdf') {
              setProcessingMessage('Extraindo dados do PDF via IA (pode levar um momento)...');
              toast({
-                 title: "Aviso",
-                 description: "A extração de PDF usa IA e pode levar mais tempo. A precisão depende do layout do PDF.",
+                 title: "Processando PDF com IA",
+                 description: "A extração de tabelas de PDFs complexos ou imagens pode demorar mais e a precisão pode variar.",
                  variant: "default",
+                 duration: 7000, // Longer duration for PDF info
              });
 
              const pdfReader = new FileReader();
              pdfReader.onload = async (e) => {
                  const pdfDataUri = e.target?.result as string; // Access result directly
                  if (!pdfDataUri) {
-                      toast({ title: "Erro", description: "Falha ao ler o arquivo PDF.", variant: "destructive" });
+                      toast({ title: "Erro de Leitura", description: "Falha ao ler o conteúdo do arquivo PDF.", variant: "destructive" });
                       setIsProcessing(false);
                       setActiveTab("upload");
                       return;
@@ -560,9 +561,10 @@ export default function Home() {
 
                      if (result.error || !result.headers || result.rows.length === 0) {
                          toast({
-                             title: "Erro na Extração do PDF",
-                             description: result.error || 'Nenhuma tabela encontrada ou erro na IA.',
+                             title: "Falha na Extração do PDF",
+                             description: result.error || 'Nenhuma tabela encontrada ou erro na IA. Verifique o layout do PDF.',
                              variant: "destructive",
+                             duration: 9000,
                          });
                          if (!result.headers || result.headers.length === 0) {
                             setActiveTab("upload");
@@ -570,18 +572,20 @@ export default function Home() {
                             setFileData([]);
                             setColumnMappings([]);
                          } else {
+                             // Headers extracted but no rows
                              extractedHeaders = result.headers;
                              extractedData = [];
                              toast({
-                                 title: "Aviso",
-                                 description: "Cabeçalhos do PDF extraídos, mas nenhuma linha de dados foi retornada pela IA.",
+                                 title: "Sucesso Parcial na Extração",
+                                 description: `Cabeçalhos do PDF ${fileToProcess.name} extraídos, mas nenhuma linha de dados foi retornada. Verifique o mapeamento.`,
                                  variant: "default",
+                                 duration: 9000,
                              });
                              setHeaders(extractedHeaders);
                              setFileData(extractedData);
                              setColumnMappings(extractedHeaders.map(header => {
                                 const guessedField = guessPredefinedField(header);
-                                const guessedType = guessDataType(header, '');
+                                const guessedType = guessDataType(header, ''); // No sample data for type guess
                                 return {
                                     originalHeader: header,
                                     mappedField: guessedField,
@@ -590,10 +594,10 @@ export default function Home() {
                                     removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
                                 };
                              }));
-                             toast({ title: "Sucesso Parcial", description: `Cabeçalhos do PDF ${fileToProcess.name} processados. Nenhuma linha de dados retornada. Verifique o mapeamento.` });
                              setActiveTab("mapping");
                          }
                      } else {
+                         // Successful extraction
                          extractedHeaders = result.headers;
                          extractedData = result.rows.map(row => {
                              const rowData: { [key: string]: any } = {};
@@ -601,8 +605,9 @@ export default function Home() {
                                  extractedHeaders.forEach((header, index) => {
                                      rowData[header] = row[index] ?? '';
                                  });
-                             } else {
+                             } else { // Object format
                                  extractedHeaders.forEach(header => {
+                                     // Ensure all headers exist in rowData, even if undefined in the source row object
                                      rowData[header] = row[header] ?? '';
                                  });
                              }
@@ -613,7 +618,9 @@ export default function Home() {
                          setFileData(extractedData);
                          setColumnMappings(extractedHeaders.map(header => {
                             const guessedField = guessPredefinedField(header);
-                            const guessedType = guessDataType(header, extractedData.length > 0 ? extractedData[0][header] : '');
+                            // Use first data row for guessing type if data exists
+                            const sampleData = extractedData.length > 0 ? extractedData[0][header] : '';
+                            const guessedType = guessDataType(header, sampleData);
                             return {
                                 originalHeader: header,
                                 mappedField: guessedField,
@@ -622,7 +629,7 @@ export default function Home() {
                                 removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
                             }
                          }));
-                         toast({ title: "Sucesso", description: `Arquivo PDF ${fileToProcess.name} processado. Verifique o mapeamento.` });
+                         toast({ title: "Sucesso na Extração do PDF", description: `Arquivo ${fileToProcess.name} processado (${extractedData.length} linhas). Verifique o mapeamento.` });
                          setActiveTab("mapping");
 
                      }
@@ -630,9 +637,10 @@ export default function Home() {
                  } catch (pdfError: any) {
                      console.error("Erro ao processar PDF via IA:", pdfError);
                      toast({
-                         title: "Erro ao Processar PDF",
-                         description: pdfError.message || "Ocorreu um erro inesperado durante a extração do PDF.",
+                         title: "Erro ao Processar PDF com IA",
+                         description: pdfError.message || "Ocorreu um erro inesperado durante a extração. Tente um arquivo diferente ou verifique o formato.",
                          variant: "destructive",
+                         duration: 9000,
                      });
                       setActiveTab("upload");
                       setHeaders([]);
@@ -646,8 +654,8 @@ export default function Home() {
              pdfReader.onerror = (error) => {
                  console.error("Erro ao ler arquivo PDF:", error);
                  toast({
-                     title: "Erro ao Ler Arquivo",
-                     description: "Não foi possível ler o arquivo PDF.",
+                     title: "Erro ao Ler Arquivo PDF",
+                     description: "Não foi possível ler o arquivo selecionado.",
                      variant: "destructive",
                  });
                  setActiveTab("upload");
@@ -687,7 +695,7 @@ export default function Home() {
                  removeMask: !!guessedField && ['cpf', 'rg', 'cnpj'].includes(guessedField) || ['Data', 'Numérico', 'Inteiro', 'CPF', 'CNPJ'].includes(guessedType ?? ''),
              }
          }));
-         toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado. Verifique o mapeamento.` });
+         toast({ title: "Sucesso", description: `Arquivo ${fileToProcess.name} processado (${extractedData.length} linhas). Verifique o mapeamento.` });
          setActiveTab("mapping");
 
      } catch (error: any) {
@@ -2297,7 +2305,10 @@ export default function Home() {
                   <Card>
                      <CardHeader>
                          <CardTitle className="text-xl">Mapeamento de Colunas de Entrada</CardTitle>
-                         <CardDescription>Associe as colunas do seu arquivo ({headers.length} colunas detectadas), configure tipos, tamanhos e remoção de máscaras.</CardDescription>
+                         <CardDescription>
+                            Associe as colunas do seu arquivo ({headers.length} colunas detectadas | {fileData.length} linhas detectadas),
+                            configure tipos, tamanhos e remoção de máscaras.
+                         </CardDescription>
                      </CardHeader>
                      <CardContent>
                        <div className="flex justify-end items-center mb-4 gap-2">
