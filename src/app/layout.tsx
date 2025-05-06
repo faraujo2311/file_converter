@@ -16,7 +16,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" suppressHydrationWarning> {/* Default language to Portuguese & suppress warning */}
+    // Remove suppressHydrationWarning if the underlying issue is fixed
+    <html lang="pt-BR"> {/* Default language to Portuguese */}
       {/* Apply Inter font variable */}
       <body className={`${inter.variable} font-sans antialiased`}>
         {children}

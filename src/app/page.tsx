@@ -3,6 +3,7 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import iconv from 'iconv-lite'; // Import iconv-lite for encoding
+import { parse, format, isValid, subMonths } from 'date-fns'; // Import date-fns functions
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,13 +13,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2, Save, RotateCcw } from 'lucide-react'; // Added Edit, Code, Loader2, Save, RotateCcw
+import { Upload, FileText, FileSpreadsheet, Settings, ArrowRight, Trash2, Plus, HelpCircle, Columns, Edit, Code, Loader2, Save, RotateCcw, ArrowUp, ArrowDown, Calculator, Server } from 'lucide-react'; // Added Edit, Code, Loader2, Save, RotateCcw, ArrowUp, ArrowDown, Calculator, Server
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog"; // Import Dialog components
 import { extractPdfTable, type ExtractPdfTableOutput } from '@/ai/flows/extract-pdf-table-flow'; // Import the AI flow
 import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"; // Import Popover
+
+
+// NOTE: Full authentication, RBAC, admin panel, user-specific backend storage,
+// captcha, IP logging, and session management features requested for v1.1.0
+// are deferred due to their complexity and requirement for significant
+// backend architecture changes (e.g., adding Firebase Auth/Firestore).
+// This implementation focuses on client-side enhancements:
+// - Button-based reordering for output fields.
+// - Save/Load configurations using localStorage.
+// - UI and basic logic for calculated fields (starting with Calcular_Data_Inicial).
 
 // Define types
 type DataType = 'Inteiro' | 'Alfanumérico' | 'Numérico' | 'Data' | 'CPF' | 'CNPJ';
@@ -41,6 +53,21 @@ type PaddingDirection = 'left' | 'right';
 type DateFormat = 'YYYYMMDD' | 'DDMMYYYY';
 type OutputEncoding = 'UTF-8' | 'ISO-8859-1' | 'Windows-1252';
 
+// Calculated Field Type
+type CalculatedFieldType = 'CalculateStartDate';
+type CalculatedFieldConfig = {
+    id: string; // Unique ID
+    type: CalculatedFieldType;
+    fieldName: string; // Name for display
+    order: number;
+    requiredInputFields: string[]; // Mapped field IDs required for calculation
+    parameters?: Record<string, any>; // e.g., { period: 'DD/MM/AAAA' }
+    dateFormat?: DateFormat; // For Data type outputs
+    length?: number; // Required for TXT
+    paddingChar?: string; // For TXT
+    paddingDirection?: PaddingDirection; // For TXT
+};
+
 // Consolidated Output Field Type using discriminated union
 type OutputFieldConfig = {
   id: string; // Unique ID for React key prop
@@ -50,16 +77,20 @@ type OutputFieldConfig = {
   paddingDirection?: PaddingDirection; // For TXT
   dateFormat?: DateFormat; // For Data type fields
 } & (
-  | { isStatic: false; mappedField: string } // Mapped field
-  | { isStatic: true; fieldName: string; staticValue: string } // Static field
+  | { isStatic: false; isCalculated: false; mappedField: string } // Mapped field
+  | { isStatic: true; isCalculated: false; fieldName: string; staticValue: string } // Static field
+  | { isStatic: false; isCalculated: true; type: CalculatedFieldType; fieldName: string; requiredInputFields: string[]; parameters?: Record<string, any> } // Calculated field
 );
 
 
 type OutputConfig = {
+  name?: string; // Optional name for saved configuration
   format: OutputFormat;
   delimiter?: string; // For CSV
   fields: OutputFieldConfig[];
+  encoding: OutputEncoding; // Added encoding to the config
 };
+
 
 // Static Field Dialog State
 type StaticFieldDialogState = {
@@ -83,6 +114,33 @@ type PredefinedFieldDialogState = {
     comment: string;
 }
 
+// Calculated Field Dialog State
+type CalculatedFieldDialogState = {
+    isOpen: boolean;
+    isEditing: boolean;
+    fieldId?: string;
+    fieldName: string;
+    type: CalculatedFieldType | '';
+    parameters: {
+        period?: string; // For CalculateStartDate
+    };
+    requiredInputFields: {
+        parcelasPagas?: string | null; // Mapped field ID for 'PARCELAS_PAGAS'
+    };
+    length: string;
+    paddingChar: string;
+    paddingDirection: PaddingDirection;
+    dateFormat: DateFormat | '';
+}
+
+// Save/Load Configuration Dialog State
+type ConfigManagementDialogState = {
+    isOpen: boolean;
+    action: 'save' | 'load' | null;
+    configName: string;
+    selectedConfigToLoad: string | null;
+}
+
 
 const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
   { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.', isPersistent: true }, // Core fields are always persistent conceptually
@@ -99,14 +157,17 @@ const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
   { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).', isPersistent: true },
   { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).', isPersistent: true },
   { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).', isPersistent: true },
+  { id: 'parcelas_pagas', name: 'Parcelas Pagas', isCore: true, comment: 'Número de parcelas pagas de um contrato/empréstimo (Inteiro).', isPersistent: true }, // Added PARCELAS_PAGAS
 ].map(f => ({ ...f, isPersistent: true })); // Ensure all core fields are marked as persistent
 
 
 const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Data', 'CPF', 'CNPJ'];
 const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252'];
+const DATE_FORMATS: DateFormat[] = ['YYYYMMDD', 'DDMMYYYY'];
 
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
 const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields-v1'; // Updated storage key
+const SAVED_CONFIGS_STORAGE_KEY = 'sca-saved-configs-v1'; // Storage key for saved configurations
 
 
 // Helper to check if a data type is numeric-like
@@ -119,6 +180,10 @@ const getDefaultPaddingChar = (field: OutputFieldConfig, mappings: ColumnMapping
     if (field.isStatic) {
         // Default to space for static unless value is purely numeric
         return /^-?\d+$/.test(field.staticValue) ? '0' : ' ';
+    } else if (field.isCalculated) {
+         // Calculated fields default based on expected output (e.g., Date -> Alphanumeric -> Space)
+         // For CalculateStartDate, it's Data, treated as Alphanumeric for padding
+         return ' ';
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
         return isNumericType(mapping?.dataType ?? null) ? '0' : ' ';
@@ -130,6 +195,9 @@ const getDefaultPaddingDirection = (field: OutputFieldConfig, mappings: ColumnMa
      if (field.isStatic) {
         // Default to left for static if value is purely numeric
         return /^-?\d+$/.test(field.staticValue) ? 'left' : 'right';
+    } else if (field.isCalculated) {
+         // Calculated fields: Left for numeric-like outputs (if any in future), Right otherwise
+         return 'right'; // Default for CalculateStartDate (Date output)
     } else {
         const mapping = mappings.find(m => m.mappedField === field.mappedField);
         return isNumericType(mapping?.dataType ?? null) ? 'left' : 'right';
@@ -180,11 +248,11 @@ export default function Home() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [fileData, setFileData] = useState<any[]>([]);
   const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
-  const [outputConfig, setOutputConfig] = useState<OutputConfig>({ format: 'txt', fields: [] });
+  const [outputConfig, setOutputConfig] = useState<OutputConfig>({ name: 'Configuração Atual', format: 'txt', fields: [], encoding: 'UTF-8' });
   const [predefinedFields, setPredefinedFields] = useState<PredefinedField[]>([]); // Initialized in useEffect
   const [newFieldName, setNewFieldName] = useState<string>('');
   const [convertedData, setConvertedData] = useState<string | Buffer>('');
-  const [outputEncoding, setOutputEncoding] = useState<OutputEncoding>('UTF-8');
+  // const [outputEncoding, setOutputEncoding] = useState<OutputEncoding>('UTF-8'); // Moved to outputConfig
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [processingMessage, setProcessingMessage] = useState<string>('Processando...');
   const [activeTab, setActiveTab] = useState<string>("upload");
@@ -210,11 +278,32 @@ export default function Home() {
         proposedFilename: '',
         finalFilename: '',
     });
+    const [calculatedFieldDialogState, setCalculatedFieldDialogState] = useState<CalculatedFieldDialogState>({
+        isOpen: false,
+        isEditing: false,
+        fieldName: '',
+        type: '',
+        parameters: {},
+        requiredInputFields: { parcelasPagas: null },
+        length: '',
+        paddingChar: ' ',
+        paddingDirection: 'right',
+        dateFormat: '',
+    });
+    const [configManagementDialogState, setConfigManagementDialogState] = useState<ConfigManagementDialogState>({
+        isOpen: false,
+        action: null,
+        configName: '',
+        selectedConfigToLoad: null,
+    });
+    const [savedConfigs, setSavedConfigs] = useState<OutputConfig[]>([]); // State for saved configurations
+
 
   const appVersion = process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0';
 
-   // Load predefined fields from localStorage on mount
+   // Load predefined fields and saved configurations from localStorage on mount
    useEffect(() => {
+       // Load Predefined Fields
        const storedFieldsJson = localStorage.getItem(PREDEFINED_FIELDS_STORAGE_KEY);
        let customFields: PredefinedField[] = [];
        if (storedFieldsJson) {
@@ -233,17 +322,33 @@ export default function Home() {
                localStorage.removeItem(PREDEFINED_FIELDS_STORAGE_KEY);
            }
        }
-       // Combine core fields with loaded custom fields, ensuring no duplicate IDs
-        const combined = [...CORE_PREDEFINED_FIELDS]; // Core fields are already marked persistent
+       const combined = [...CORE_PREDEFINED_FIELDS];
        const coreIds = new Set(CORE_PREDEFINED_FIELDS.map(f => f.id));
-
        customFields.forEach(cf => {
            if (!coreIds.has(cf.id) && !combined.some(f => f.id === cf.id)) {
-               combined.push(cf); // Add custom field (already marked persistent)
+               combined.push(cf);
            }
        });
-
        setPredefinedFields(combined);
+
+        // Load Saved Configurations
+        const storedConfigsJson = localStorage.getItem(SAVED_CONFIGS_STORAGE_KEY);
+        if (storedConfigsJson) {
+            try {
+                const loadedConfigs = JSON.parse(storedConfigsJson) as OutputConfig[];
+                // Basic validation: ensure it's an array and items have a name and fields
+                if (Array.isArray(loadedConfigs) && loadedConfigs.every(c => c.name && Array.isArray(c.fields))) {
+                    setSavedConfigs(loadedConfigs);
+                } else {
+                    console.warn("Formato inválido encontrado no localStorage para configurações salvas. Ignorando.");
+                    localStorage.removeItem(SAVED_CONFIGS_STORAGE_KEY);
+                }
+            } catch (e) {
+                console.error("Falha ao analisar configurações salvas do localStorage:", e);
+                localStorage.removeItem(SAVED_CONFIGS_STORAGE_KEY);
+            }
+        }
+
    }, []);
 
    // Save only custom, persistent predefined fields to localStorage
@@ -255,6 +360,16 @@ export default function Home() {
        } catch (e) {
            console.error("Falha ao salvar campos pré-definidos no localStorage:", e);
            toast({ title: "Erro", description: "Falha ao salvar campos pré-definidos personalizados.", variant: "destructive" });
+       }
+   }, [toast]);
+
+   // Save configurations to localStorage
+   const saveAllConfigs = useCallback((configsToSave: OutputConfig[]) => {
+       try {
+           localStorage.setItem(SAVED_CONFIGS_STORAGE_KEY, JSON.stringify(configsToSave));
+       } catch (e) {
+           console.error("Falha ao salvar configurações no localStorage:", e);
+           toast({ title: "Erro", description: "Falha ao salvar configurações.", variant: "destructive" });
        }
    }, [toast]);
 
@@ -270,12 +385,17 @@ export default function Home() {
     setHeaders([]);
     setFileData([]);
     setColumnMappings([]);
-    setOutputConfig({ format: 'txt', fields: [] });
-    // Don't reset predefined fields loaded from storage, but maybe update their non-persistent state?
-    // For now, keep them as they are. Re-evaluate if needed.
+    // Reset output config to default, keeping encoding
+    setOutputConfig(prev => ({
+        name: 'Configuração Atual',
+        format: 'txt',
+        fields: [],
+        encoding: prev.encoding, // Keep the last selected encoding
+    }));
+    // Don't reset predefined fields loaded from storage
     setNewFieldName('');
     setConvertedData('');
-    setOutputEncoding('UTF-8');
+    // setOutputEncoding('UTF-8'); // Removed, part of outputConfig now
     setIsProcessing(false);
     setProcessingMessage('Processando...');
     setActiveTab("upload");
@@ -283,6 +403,8 @@ export default function Home() {
      setStaticFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', staticValue: '', length: '', paddingChar: ' ', paddingDirection: 'right' });
      setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', isPersistent: false, comment: '' });
       setDownloadDialogState({ isOpen: false, proposedFilename: '', finalFilename: '' });
+      setCalculatedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', type: '', parameters: {}, requiredInputFields: { parcelasPagas: null }, length: '', paddingChar: ' ', paddingDirection: 'right', dateFormat: '' });
+      setConfigManagementDialogState({ isOpen: false, action: null, configName: '', selectedConfigToLoad: null });
     const fileInput = document.getElementById('file-upload') as HTMLInputElement;
     if (fileInput) fileInput.value = '';
      toast({ title: "Pronto", description: "Formulário reiniciado para nova conversão." });
@@ -312,6 +434,7 @@ export default function Home() {
       setFileData([]);
       setColumnMappings([]);
       setConvertedData('');
+      setOutputConfig(prev => ({ ...prev, name: 'Configuração Atual', fields: [] })); // Reset fields but keep other settings
       setActiveTab("mapping");
       processFile(selectedFile);
     }
@@ -335,6 +458,7 @@ export default function Home() {
           'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
           'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
           'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'],
+          'parcelas_pagas': ['parcelas pagas', 'parc pagas', 'qtd parcelas pagas', 'parc'], // Added guess for parcelas_pagas
       };
 
       for (const fieldId in guesses) {
@@ -357,7 +481,7 @@ export default function Home() {
       if (lowerHeader.includes('cpf')) return 'CPF';
       if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc')) return 'Data';
       if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad')) return 'Numérico';
-       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id')) return 'Inteiro';
+       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id') || lowerHeader.includes('parcela') ) return 'Inteiro'; // Added parcela for Inteiro
       if (lowerHeader.includes('rg')) return 'Alfanumérico';
        if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico';
        if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao') || lowerHeader.includes('cargo') || lowerHeader.includes('funcao')) return 'Alfanumérico';
@@ -387,6 +511,7 @@ export default function Home() {
      setFileData([]);
      setColumnMappings([]);
      setConvertedData('');
+     setOutputConfig(prev => ({ ...prev, name: 'Configuração Atual', fields: [] })); // Reset fields on new file load
 
      let extractedHeaders: string[] = [];
      let extractedData: any[] = [];
@@ -734,7 +859,7 @@ export default function Home() {
     // Update output config (remove if it was a mapped field)
     setOutputConfig(prev => ({
       ...prev,
-      fields: prev.fields.filter(f => f.isStatic || f.mappedField !== idToRemove),
+      fields: prev.fields.filter(f => f.isStatic || f.isCalculated || f.mappedField !== idToRemove), // Also keep calculated
     }));
 
      // Update localStorage
@@ -750,7 +875,7 @@ export default function Home() {
           const newFields = prev.fields.map(f => ({
               ...f,
               delimiter: value === 'csv' ? (prev.delimiter || '|') : undefined,
-              length: value === 'txt' ? (f.length ?? (f.isStatic ? (f.staticValue?.length || 10) : 10)) : undefined,
+              length: value === 'txt' ? (f.length ?? (f.isStatic ? (f.staticValue?.length || 10) : f.isCalculated ? 10 : 10)) : undefined, // Default length for calculated too
               paddingChar: value === 'txt' ? (f.paddingChar ?? getDefaultPaddingChar(f, columnMappings)) : undefined,
               paddingDirection: value === 'txt' ? (f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings)) : undefined,
           }));
@@ -774,8 +899,7 @@ export default function Home() {
                 const updatedField = { ...f };
                 let actualValue = value === NONE_VALUE_PLACEHOLDER ? null : value;
 
-                if (field === 'mappedField') {
-                    if (!updatedField.isStatic) {
+                if (field === 'mappedField' && !updatedField.isStatic && !updatedField.isCalculated) {
                         updatedField.mappedField = actualValue;
                         const correspondingMapping = columnMappings.find(cm => cm.mappedField === actualValue);
                         const dataType = correspondingMapping?.dataType ?? null;
@@ -794,7 +918,6 @@ export default function Home() {
                         } else {
                             delete updatedField.dateFormat;
                         }
-                    }
                 } else if (field === 'length') {
                     const numValue = parseInt(value, 10);
                     updatedField.length = isNaN(numValue) || numValue <= 0 ? undefined : numValue;
@@ -803,8 +926,9 @@ export default function Home() {
                           updatedField.paddingDirection = updatedField.paddingDirection ?? getDefaultPaddingDirection(updatedField, columnMappings);
                      }
                 } else if (field === 'order') {
-                    const numValue = parseInt(value, 10);
-                    updatedField.order = isNaN(numValue) ? (prev.fields.length > 0 ? Math.max(...prev.fields.map(f => f.order)) + 1 : 0) : numValue;
+                    // Order change is handled by moveFieldUp/Down functions
+                     console.warn("Changing order directly is disabled. Use move buttons.");
+                    return updatedField; // Return unchanged field
                 } else if (field === 'paddingChar') {
                     updatedField.paddingChar = String(value).slice(0, 1);
                 } else if (field === 'paddingDirection') {
@@ -813,24 +937,31 @@ export default function Home() {
                      updatedField.dateFormat = value as DateFormat;
                 }
                 else {
-                    (updatedField as any)[field] = actualValue;
+                    // Handle changes for static or calculated fields if necessary
+                     if (field === 'staticValue' && updatedField.isStatic) {
+                         updatedField.staticValue = actualValue;
+                     } else if (field === 'fieldName' && (updatedField.isStatic || updatedField.isCalculated)) {
+                         updatedField.fieldName = actualValue;
+                     }
+                    // Add more conditions for calculated fields if needed
                 }
                 return updatedField;
             }
             return f;
         });
 
-        newFields.sort((a, b) => a.order - b.order);
-        const reorderedFields = newFields.map((f, idx) => ({ ...f, order: idx }));
+        // Sorting is handled by moveFieldUp/Down and initial load/add
+        // newFields.sort((a, b) => a.order - b.order);
+        // const reorderedFields = newFields.map((f, idx) => ({ ...f, order: idx }));
 
-        return { ...prev, fields: reorderedFields };
+        return { ...prev, fields: newFields }; // Return potentially updated fields without reordering here
     });
 };
 
 
   const addOutputField = () => {
     const availableMappedFields = columnMappings
-        .filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && of.mappedField === m.mappedField))
+        .filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === m.mappedField))
         .map(m => m.mappedField);
 
     if (availableMappedFields.length === 0) {
@@ -847,19 +978,20 @@ export default function Home() {
     const newOutputField: OutputFieldConfig = {
         id: `mapped-${newFieldId}-${Date.now()}`,
         isStatic: false,
+        isCalculated: false,
         mappedField: newFieldId,
         order: maxOrder + 1,
         ...(outputConfig.format === 'txt' && {
              length: defaultLength ?? 10,
-             paddingChar: getDefaultPaddingChar({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
-             paddingDirection: getDefaultPaddingDirection({isStatic: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
+             paddingChar: getDefaultPaddingChar({isStatic: false, isCalculated: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
+             paddingDirection: getDefaultPaddingDirection({isStatic: false, isCalculated: false, mappedField: newFieldId, id: '', order: 0 }, columnMappings),
          }),
         dateFormat: dataType === 'Data' ? 'YYYYMMDD' : undefined,
     };
 
     setOutputConfig(prev => ({
         ...prev,
-        fields: [...prev.fields, newOutputField].sort((a, b) => a.order - b.order)
+        fields: [...prev.fields, newOutputField].sort((a, b) => a.order - b.order) // Sort after adding
     }));
 };
 
@@ -867,6 +999,7 @@ export default function Home() {
   const removeOutputField = (idToRemove: string) => {
      setOutputConfig(prev => {
          const newFields = prev.fields.filter(f => f.id !== idToRemove);
+         // Re-order remaining fields sequentially
          const reorderedFields = newFields.sort((a, b) => a.order - b.order).map((f, idx) => ({ ...f, order: idx }));
          return {
              ...prev,
@@ -874,6 +1007,34 @@ export default function Home() {
          };
      });
    };
+
+   // --- Move Output Field ---
+   const moveField = (id: string, direction: 'up' | 'down') => {
+       setOutputConfig(prev => {
+           const fields = [...prev.fields];
+           const currentIndex = fields.findIndex(f => f.id === id);
+
+           if (currentIndex === -1) return prev; // Field not found
+
+           const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+           if (targetIndex < 0 || targetIndex >= fields.length) return prev; // Cannot move beyond bounds
+
+           // Swap order properties
+           const currentOrder = fields[currentIndex].order;
+           fields[currentIndex].order = fields[targetIndex].order;
+           fields[targetIndex].order = currentOrder;
+
+           // Sort array based on new order
+           fields.sort((a, b) => a.order - b.order);
+
+           // Renumber order sequentially to ensure no gaps or duplicates
+            const renumberedFields = fields.map((f, idx) => ({ ...f, order: idx }));
+
+           return { ...prev, fields: renumberedFields };
+       });
+   };
+
 
  // --- Static Field Handling ---
     const openAddStaticFieldDialog = () => {
@@ -930,9 +1091,10 @@ export default function Home() {
         const staticField: OutputFieldConfig = {
              id: isEditing && fieldId ? fieldId : `static-${Date.now()}`,
              isStatic: true,
+             isCalculated: false, // Explicitly false
              fieldName: fieldName.trim(),
              staticValue: staticValue,
-             order: 0,
+             order: 0, // Order will be assigned below
              ...(outputConfig.format === 'txt' && {
                 length: len,
                 paddingChar: paddingChar,
@@ -945,26 +1107,30 @@ export default function Home() {
             let newFields;
             if (isEditing) {
                  const existingFieldIndex = prev.fields.findIndex(f => f.id === fieldId);
-                 if (existingFieldIndex === -1) return prev;
+                 if (existingFieldIndex === -1) return prev; // Should not happen
                  newFields = [...prev.fields];
-                  const updatedStaticField = { ...staticField, order: prev.fields[existingFieldIndex].order };
+                  const updatedStaticField = { ...staticField, order: prev.fields[existingFieldIndex].order }; // Keep existing order
+                  // Update format-specific fields if format is TXT
                   if (prev.format === 'txt') {
                      updatedStaticField.length = len;
                      updatedStaticField.paddingChar = paddingChar;
                      updatedStaticField.paddingDirection = paddingDirection;
                   } else {
-                      updatedStaticField.length = len;
-                      updatedStaticField.paddingChar = paddingChar;
-                      updatedStaticField.paddingDirection = paddingDirection;
+                      // Remove TXT-specific fields if not TXT format
+                      delete updatedStaticField.length;
+                      delete updatedStaticField.paddingChar;
+                      delete updatedStaticField.paddingDirection;
                   }
 
                  newFields[existingFieldIndex] = updatedStaticField;
 
             } else {
+                 // Assign next available order number
                  const maxOrder = prev.fields.length > 0 ? Math.max(...prev.fields.map(f => f.order)) : -1;
                  staticField.order = maxOrder + 1;
                  newFields = [...prev.fields, staticField];
             }
+             // Sort based on order and renumber sequentially
              newFields.sort((a, b) => a.order - b.order);
              const reorderedFields = newFields.map((f, idx) => ({ ...f, order: idx }));
 
@@ -975,23 +1141,210 @@ export default function Home() {
         toast({ title: "Sucesso", description: `Campo estático "${fieldName.trim()}" ${isEditing ? 'atualizado' : 'adicionado'}.` });
     };
 
+    // --- Calculated Field Handling ---
+    const openAddCalculatedFieldDialog = () => {
+        setCalculatedFieldDialogState({
+            isOpen: true,
+            isEditing: false,
+            fieldName: '',
+            type: '',
+            parameters: {},
+            requiredInputFields: { parcelasPagas: null }, // Reset required fields
+            length: '',
+            paddingChar: ' ',
+            paddingDirection: 'right',
+            dateFormat: '',
+        });
+    };
+
+    const openEditCalculatedFieldDialog = (field: OutputFieldConfig) => {
+        if (!field.isCalculated) return;
+
+        // Populate requiredInputFields based on the field's requirements
+        const requiredFieldsState: CalculatedFieldDialogState['requiredInputFields'] = {};
+        if (field.type === 'CalculateStartDate') {
+            requiredFieldsState.parcelasPagas = field.requiredInputFields[0] ?? null; // Assuming 'parcelas_pagas' is the first/only one
+        }
+
+        setCalculatedFieldDialogState({
+            isOpen: true,
+            isEditing: true,
+            fieldId: field.id,
+            fieldName: field.fieldName,
+            type: field.type,
+            parameters: { ...field.parameters },
+            requiredInputFields: requiredFieldsState,
+            length: String(field.length ?? ''),
+            paddingChar: field.paddingChar ?? getDefaultPaddingChar(field, columnMappings),
+            paddingDirection: field.paddingDirection ?? getDefaultPaddingDirection(field, columnMappings),
+            dateFormat: field.dateFormat ?? '',
+        });
+    };
+
+     const handleCalculatedFieldDialogChange = (
+        field: keyof CalculatedFieldDialogState | `parameters.${string}` | `requiredInputFields.${string}`,
+        value: any
+    ) => {
+        setCalculatedFieldDialogState(prev => {
+            const newState = { ...prev };
+            if (field.startsWith('parameters.')) {
+                const paramKey = field.split('.')[1];
+                newState.parameters = { ...newState.parameters, [paramKey]: value };
+            } else if (field.startsWith('requiredInputFields.')) {
+                const inputKey = field.split('.')[1] as keyof CalculatedFieldDialogState['requiredInputFields'];
+                newState.requiredInputFields = {
+                    ...newState.requiredInputFields,
+                    [inputKey]: value === NONE_VALUE_PLACEHOLDER ? null : value
+                };
+            } else {
+                 // Handle top-level fields
+                 if (field === 'length') {
+                     newState.length = value; // Keep as string
+                 } else if (field === 'dateFormat') {
+                     newState.dateFormat = value === NONE_VALUE_PLACEHOLDER ? '' : value;
+                 } else if (field === 'type') {
+                     newState.type = value === NONE_VALUE_PLACEHOLDER ? '' : value;
+                      // Reset related fields when type changes
+                      newState.parameters = {};
+                      newState.requiredInputFields = {};
+                      newState.dateFormat = '';
+                      if (value === 'CalculateStartDate') {
+                          newState.requiredInputFields = { parcelasPagas: null };
+                          newState.dateFormat = 'YYYYMMDD'; // Default for this type
+                          newState.paddingDirection = 'right';
+                          newState.paddingChar = ' ';
+                      }
+                 }
+                 else {
+                     (newState as any)[field] = value;
+                 }
+            }
+            return newState;
+        });
+    };
+
+     const saveCalculatedField = () => {
+        const { isEditing, fieldId, fieldName, type, parameters, requiredInputFields, length, paddingChar, paddingDirection, dateFormat } = calculatedFieldDialogState;
+        const len = parseInt(length, 10);
+
+        if (!fieldName.trim()) {
+            toast({ title: "Erro", description: "Nome do Campo Calculado não pode ser vazio.", variant: "destructive" });
+            return;
+        }
+         if (!type) {
+             toast({ title: "Erro", description: "Selecione o Tipo de Cálculo.", variant: "destructive" });
+             return;
+         }
+        if (outputConfig.format === 'txt' && (isNaN(len) || len <= 0)) {
+            toast({ title: "Erro", description: "Tamanho deve ser um número positivo para formato TXT.", variant: "destructive" });
+            return;
+        }
+         if (outputConfig.format === 'txt' && (!paddingChar || paddingChar.length !== 1)) {
+            toast({ title: "Erro", description: "Caractere de Preenchimento deve ser um único caractere para TXT.", variant: "destructive" });
+            return;
+        }
+         if (type === 'CalculateStartDate' && !parameters.period) {
+             toast({ title: "Erro", description: "Informe o Período Atual (DD/MM/AAAA) para Calcular Data Inicial.", variant: "destructive" });
+             return;
+         }
+          if (type === 'CalculateStartDate' && !requiredInputFields.parcelasPagas) {
+             toast({ title: "Erro", description: "Selecione o campo mapeado para 'Parcelas Pagas'.", variant: "destructive" });
+             return;
+         }
+          if (type === 'CalculateStartDate' && !dateFormat) {
+             toast({ title: "Erro", description: "Selecione um Formato de Data para a saída.", variant: "destructive" });
+             return;
+         }
+
+
+        // Construct the calculated field config
+        const requiredInputsArray: string[] = [];
+        if (type === 'CalculateStartDate' && requiredInputFields.parcelasPagas) {
+            requiredInputsArray.push(requiredInputFields.parcelasPagas);
+        }
+        // Add more required inputs for other types if needed
+
+         const calculatedField: OutputFieldConfig = {
+             id: isEditing && fieldId ? fieldId : `calc-${type}-${Date.now()}`,
+             isStatic: false,
+             isCalculated: true,
+             fieldName: fieldName.trim(),
+             type: type,
+             requiredInputFields: requiredInputsArray,
+             parameters: { ...parameters },
+             order: 0, // Order will be assigned below
+             ...(type === 'CalculateStartDate' && { dateFormat }), // Only add dateFormat if it's a Date type calculation
+             ...(outputConfig.format === 'txt' && {
+                 length: len,
+                 paddingChar: paddingChar,
+                 paddingDirection: paddingDirection,
+             }),
+         };
+
+
+        setOutputConfig(prev => {
+            let newFields;
+            if (isEditing) {
+                const existingFieldIndex = prev.fields.findIndex(f => f.id === fieldId);
+                if (existingFieldIndex === -1) return prev; // Should not happen
+                newFields = [...prev.fields];
+                 const updatedCalcField = { ...calculatedField, order: prev.fields[existingFieldIndex].order }; // Keep order
+
+                 // Update format-specific fields
+                 if (prev.format === 'txt') {
+                     updatedCalcField.length = len;
+                     updatedCalcField.paddingChar = paddingChar;
+                     updatedCalcField.paddingDirection = paddingDirection;
+                 } else {
+                     delete updatedCalcField.length;
+                     delete updatedCalcField.paddingChar;
+                     delete updatedCalcField.paddingDirection;
+                 }
+                 // Update date format if applicable
+                 if (type === 'CalculateStartDate') {
+                     updatedCalcField.dateFormat = dateFormat as DateFormat;
+                 } else {
+                     delete updatedCalcField.dateFormat;
+                 }
+
+                newFields[existingFieldIndex] = updatedCalcField;
+            } else {
+                // Assign next available order number
+                const maxOrder = prev.fields.length > 0 ? Math.max(...prev.fields.map(f => f.order)) : -1;
+                calculatedField.order = maxOrder + 1;
+                newFields = [...prev.fields, calculatedField];
+            }
+            // Sort based on order and renumber sequentially
+            newFields.sort((a, b) => a.order - b.order);
+            const reorderedFields = newFields.map((f, idx) => ({ ...f, order: idx }));
+
+            return { ...prev, fields: reorderedFields };
+        });
+
+        setCalculatedFieldDialogState({ ...calculatedFieldDialogState, isOpen: false }); // Close dialog
+        toast({ title: "Sucesso", description: `Campo calculado "${fieldName.trim()}" ${isEditing ? 'atualizado' : 'adicionado'}.` });
+    };
+
 
  // Effect to initialize/update output fields based on mapped fields and format changes
    useEffect(() => {
-       if (columnMappings.length === 0 && fileData.length === 0) return;
+       if (columnMappings.length === 0 && fileData.length === 0 && outputConfig.fields.every(f => !f.isStatic && !f.isCalculated)) return; // Only run if needed
 
        setOutputConfig(prevConfig => {
-           const existingFieldsMap = new Map(prevConfig.fields.map(f => [f.isStatic ? f.id : f.mappedField, f]));
+           const existingFieldsMap = new Map(prevConfig.fields.map(f => [f.id, f])); // Use ID as key for uniqueness
 
+           // Update MAPPED fields based on current mappings and format
            const potentialMappedFields = columnMappings
                .filter(m => m.mappedField !== null)
-               .map((m, index) => {
+               .map((m) => {
                    const dataType = m.dataType ?? null;
-                   const fieldId = `mapped-${m.mappedField!}-${index}`;
-                   const existingField = existingFieldsMap.get(m.mappedField!) as OutputFieldConfig | undefined;
+                   // Try to find existing field by mappedField ID first (for persistence across format changes)
+                   let existingField = prevConfig.fields.find(f => !f.isStatic && !f.isCalculated && f.mappedField === m.mappedField);
+                   const fieldId = existingField?.id ?? `mapped-${m.mappedField!}-${Date.now()}`; // Generate new ID if not found
 
-                    let baseField: Omit<OutputFieldConfig, 'id' | 'order' | 'isStatic' | 'mappedField'> & { mappedField: string, isStatic: false } = {
+                    let baseField: Omit<OutputFieldConfig, 'id' | 'order' | 'isStatic' | 'isCalculated' | 'mappedField'> & { mappedField: string, isStatic: false, isCalculated: false } = {
                        isStatic: false,
+                       isCalculated: false,
                        mappedField: m.mappedField!,
                        length: existingField?.length ?? (dataType === 'Alfanumérico' ? (m.length ?? undefined) : undefined),
                        paddingChar: existingField?.paddingChar ?? undefined,
@@ -1004,6 +1357,7 @@ export default function Home() {
                         baseField.paddingChar = baseField.paddingChar ?? getDefaultPaddingChar(baseField, columnMappings);
                         baseField.paddingDirection = baseField.paddingDirection ?? getDefaultPaddingDirection(baseField, columnMappings);
                    } else {
+                       // Keep TXT settings unless they were never set (undefined)
                        if (existingField?.length === undefined) delete baseField.length;
                        if (existingField?.paddingChar === undefined) delete baseField.paddingChar;
                        if (existingField?.paddingDirection === undefined) delete baseField.paddingDirection;
@@ -1017,22 +1371,22 @@ export default function Home() {
 
                    return {
                         ...baseField,
-                        id: existingField?.id ?? fieldId,
-                        order: existingField?.order ?? (prevConfig.fields.length + index)
+                        id: fieldId,
+                        order: existingField?.order ?? (prevConfig.fields.length + columnMappings.findIndex(cm => cm.mappedField === m.mappedField)) // Maintain or assign order
                    };
                });
 
-
+            // Keep only one entry per mappedField ID
            const uniqueMappedFields = potentialMappedFields.reduce((acc, current) => {
-               const existingIndex = acc.findIndex(item => !item.isStatic && item.mappedField === current.mappedField);
+               const existingIndex = acc.findIndex(item => !item.isStatic && !item.isCalculated && item.mappedField === current.mappedField);
                 if (existingIndex === -1) {
                    acc.push(current);
-               } else if (current.order < acc[existingIndex].order) {
-                    acc[existingIndex] = current;
                }
+               // Decide if update needed (e.g., if mapping details changed) - simple keep first for now
                return acc;
-           }, [] as (OutputFieldConfig & {isStatic: false})[]);
+           }, [] as (OutputFieldConfig & {isStatic: false, isCalculated: false})[]);
 
+            // Update STATIC fields based on format
             const updatedStaticFields = prevConfig.fields
                 .filter((f): f is OutputFieldConfig & { isStatic: true } => f.isStatic)
                 .map(f => {
@@ -1044,40 +1398,129 @@ export default function Home() {
                             paddingDirection: f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings),
                         };
                     } else {
+                         // Remove TXT props if format is not TXT and they weren't originally set
+                         const { length, paddingChar, paddingDirection, ...rest } = f;
+                         const originalField = existingFieldsMap.get(f.id);
                          return {
-                             ...f,
+                             ...rest,
+                             ...(originalField?.length !== undefined && { length }),
+                             ...(originalField?.paddingChar !== undefined && { paddingChar }),
+                             ...(originalField?.paddingDirection !== undefined && { paddingDirection }),
+                         };
+                    }
+                });
+
+             // Update CALCULATED fields based on format
+            const updatedCalculatedFields = prevConfig.fields
+                .filter((f): f is OutputFieldConfig & { isCalculated: true } => f.isCalculated)
+                .map(f => {
+                    if (prevConfig.format === 'txt') {
+                        return {
+                            ...f,
+                            length: f.length ?? 10, // Default length for calculated
+                            paddingChar: f.paddingChar ?? getDefaultPaddingChar(f, columnMappings),
+                            paddingDirection: f.paddingDirection ?? getDefaultPaddingDirection(f, columnMappings),
+                             dateFormat: f.dateFormat ?? (f.type === 'CalculateStartDate' ? 'YYYYMMDD' : undefined), // Ensure dateFormat if needed
+                        };
+                    } else {
+                        // Remove TXT props if format is not TXT and they weren't originally set
+                         const { length, paddingChar, paddingDirection, ...rest } = f;
+                         const originalField = existingFieldsMap.get(f.id);
+                         return {
+                             ...rest,
+                              dateFormat: f.dateFormat ?? (f.type === 'CalculateStartDate' ? 'YYYYMMDD' : undefined), // Ensure dateFormat if needed
+                             ...(originalField?.length !== undefined && { length }),
+                             ...(originalField?.paddingChar !== undefined && { paddingChar }),
+                             ...(originalField?.paddingDirection !== undefined && { paddingDirection }),
                          };
                     }
                 });
 
 
+            // Combine all field types
             let combinedFields: OutputFieldConfig[] = [
                ...updatedStaticFields,
+               ...updatedCalculatedFields,
                ...uniqueMappedFields
            ];
 
+            // Filter out mapped fields whose mapping was removed
             combinedFields = combinedFields.filter(field =>
-               field.isStatic || columnMappings.some(cm => cm.mappedField === field.mappedField)
+               field.isStatic || field.isCalculated || columnMappings.some(cm => cm.mappedField === field.mappedField)
            );
 
 
+           // Sort and renumber order
            combinedFields.sort((a, b) => a.order - b.order);
            const reorderedFinalFields = combinedFields.map((f, idx) => ({ ...f, order: idx }));
 
 
+            // Check if the final fields array has actually changed
             const hasChanged = JSON.stringify(prevConfig.fields) !== JSON.stringify(reorderedFinalFields);
 
            if (hasChanged) {
+                console.log("Output fields updated:", reorderedFinalFields);
                return {
                    ...prevConfig,
                    fields: reorderedFinalFields
                };
            } else {
-               return prevConfig;
+                console.log("No changes to output fields.");
+               return prevConfig; // No change, return previous config
            }
        });
-   }, [columnMappings, fileData, outputConfig.format]);
+   }, [columnMappings, fileData.length, outputConfig.format]); // Depend on fileData.length to trigger on new file
 
+
+    // --- Calculate Field Value ---
+    const calculateFieldValue = (field: OutputFieldConfig, row: any): string => {
+        if (!field.isCalculated) return ''; // Should not happen
+
+        try {
+            switch (field.type) {
+                case 'CalculateStartDate':
+                    const periodStr = field.parameters?.period as string;
+                    const parcelasPagasFieldId = field.requiredInputFields[0]; // e.g., 'parcelas_pagas'
+                    const parcelasMapping = columnMappings.find(m => m.mappedField === parcelasPagasFieldId);
+
+                    if (!periodStr || !parcelasMapping) {
+                        console.warn(`Campo Calculado ${field.fieldName}: Período ou Mapeamento de Parcelas não encontrado.`);
+                        return '';
+                    }
+
+                    const parcelasValueRaw = row[parcelasMapping.originalHeader];
+                     let parcelasPagasNum = parseInt(removeMaskHelper(String(parcelasValueRaw ?? '0'), 'Inteiro'), 10);
+
+                     if (isNaN(parcelasPagasNum) || parcelasPagasNum < 0) {
+                        console.warn(`Campo Calculado ${field.fieldName}: Valor de Parcelas Pagas inválido ou não numérico ('${parcelasValueRaw}'). Usando 0.`);
+                        parcelasPagasNum = 0;
+                    }
+
+
+                    // Parse the period date (assuming DD/MM/AAAA)
+                    const periodDate = parse(periodStr, 'dd/MM/yyyy', new Date());
+                    if (!isValid(periodDate)) {
+                         console.warn(`Campo Calculado ${field.fieldName}: Período Atual inválido ('${periodStr}').`);
+                         return '';
+                    }
+
+                    // Subtract months
+                    const startDate = subMonths(periodDate, parcelasPagasNum);
+
+                    // Format output date
+                    const dateFormatStr = field.dateFormat === 'YYYYMMDD' ? 'yyyyMMdd' : 'ddMMyyyy';
+                    return format(startDate, dateFormatStr);
+
+                // Add cases for other calculated field types here
+                default:
+                    console.warn(`Tipo de campo calculado desconhecido: ${field.type}`);
+                    return '';
+            }
+        } catch (error: any) {
+             console.error(`Erro ao calcular campo ${field.fieldName}:`, error);
+             return '';
+        }
+    };
 
   // --- Conversion ---
   const convertFile = () => {
@@ -1085,8 +1528,38 @@ export default function Home() {
     setProcessingMessage('Convertendo arquivo...');
     setConvertedData('');
 
+     // Validation: Check if all required inputs for calculated fields are mapped
+     const calculatedFieldsWithMissingInputs = outputConfig.fields
+        .filter((f): f is OutputFieldConfig & { isCalculated: true } => f.isCalculated)
+        .filter(cf =>
+            cf.requiredInputFields.some(reqId =>
+                !columnMappings.some(cm => cm.mappedField === reqId)
+            )
+        );
+
+     if (calculatedFieldsWithMissingInputs.length > 0) {
+         const missingFieldNames = calculatedFieldsWithMissingInputs.map(cf => cf.fieldName).join(', ');
+         const missingInputs = calculatedFieldsWithMissingInputs
+             .flatMap(cf => cf.requiredInputFields)
+             .filter(reqId => !columnMappings.some(cm => cm.mappedField === reqId))
+             .map(reqId => predefinedFields.find(pf => pf.id === reqId)?.name || reqId)
+             .filter((value, index, self) => self.indexOf(value) === index) // Unique names
+             .join(', ');
+
+         toast({
+             title: "Erro de Configuração",
+             description: `Os campos calculados (${missingFieldNames}) requerem que os seguintes campos estejam mapeados na Aba 2: ${missingInputs}.`,
+             variant: "destructive",
+             duration: 10000, // Longer duration for error message
+         });
+         setIsProcessing(false);
+         setActiveTab("config"); // Go back to config tab
+         return;
+     }
+
+
     if (!fileData && outputConfig.fields.every(f => f.isStatic === false)) {
-        toast({ title: "Erro", description: "Nenhum dado de entrada ou campo mapeado para converter.", variant: "destructive" });
+        toast({ title: "Erro", description: "Nenhum dado de entrada ou campo mapeado/calculado para converter.", variant: "destructive" });
         setIsProcessing(false);
         return;
     }
@@ -1096,8 +1569,8 @@ export default function Home() {
         return;
     }
 
-    const mappedOutputFields = outputConfig.fields.filter(f => !f.isStatic);
-    const requiredMappings = columnMappings.filter(m => mappedOutputFields.some(f => !f.isStatic && f.mappedField === m.mappedField));
+    const mappedOutputFields = outputConfig.fields.filter(f => !f.isStatic && !f.isCalculated);
+    const requiredMappings = columnMappings.filter(m => mappedOutputFields.some(f => !f.isStatic && !f.isCalculated && f.mappedField === m.mappedField));
 
     const usedMappedFields = new Set(mappedOutputFields.map(f => f.mappedField));
     const mappingsUsedInOutput = columnMappings.filter(m => m.mappedField && usedMappedFields.has(m.mappedField));
@@ -1122,8 +1595,12 @@ export default function Home() {
         setIsProcessing(false);
         return;
     }
-    if (outputConfig.fields.some(f => !f.isStatic && columnMappings.find(cm => cm.mappedField === f.mappedField)?.dataType === 'Data' && !f.dateFormat)) {
-        toast({ title: "Erro", description: "Selecione um 'Formato Data' para todos os campos do tipo Data na saída.", variant: "destructive" });
+    // Check date format for both mapped 'Data' fields and calculated fields that output dates
+    if (outputConfig.fields.some(f =>
+        ((!f.isStatic && !f.isCalculated && columnMappings.find(cm => cm.mappedField === f.mappedField)?.dataType === 'Data') ||
+         (f.isCalculated && f.type === 'CalculateStartDate')) && // Add other date-outputting calc types here
+        !f.dateFormat)) {
+        toast({ title: "Erro", description: "Selecione um 'Formato Data' para todos os campos do tipo Data (mapeados ou calculados) na saída.", variant: "destructive" });
         setIsProcessing(false);
         return;
     }
@@ -1133,7 +1610,7 @@ export default function Home() {
       let resultString = '';
       const sortedOutputFields = [...outputConfig.fields].sort((a, b) => a.order - b.order);
 
-      const dataToProcess = fileData && fileData.length > 0 ? fileData : [{}];
+      const dataToProcess = fileData && fileData.length > 0 ? fileData : [{}]; // Use dummy row if no data but static/calculated fields exist
 
       dataToProcess.forEach(row => {
         let line = '';
@@ -1146,8 +1623,38 @@ export default function Home() {
           if (outputField.isStatic) {
              value = outputField.staticValue ?? '';
              originalValue = value;
-             dataType = /^-?\d+([.,]\d+)?$/.test(value) ? 'Numérico' : 'Alfanumérico';
-          } else {
+             // Try to guess data type for padding purposes if TXT
+              if (outputConfig.format === 'txt') {
+                 dataType = /^-?\d+$/.test(value) ? 'Inteiro' : /^-?\d+(\.|,)\d+$/.test(value) ? 'Numérico' : 'Alfanumérico';
+             }
+          } else if (outputField.isCalculated) {
+             value = calculateFieldValue(outputField, row);
+             originalValue = `Calculado: ${value}`; // For logging/debugging
+             // Determine dataType based on calculation type for formatting
+             if (outputField.type === 'CalculateStartDate') {
+                 dataType = 'Data';
+             } else {
+                 dataType = 'Alfanumérico'; // Default for unknown/other calc types
+             }
+             // Use specified dateFormat for calculated date fields
+             const dateFormat = outputField.dateFormat;
+             if (dataType === 'Data' && value && dateFormat) {
+                 // The calculateFieldValue should already return the formatted string
+                 // This block might be redundant if calculateFieldValue handles formatting
+                 try {
+                     // Attempt to parse the already formatted value just to validate
+                     const parsedCalcDate = parse(value, dateFormat === 'YYYYMMDD' ? 'yyyyMMdd' : 'ddMMyyyy', new Date());
+                     if (!isValid(parsedCalcDate)) {
+                          console.warn(`Valor calculado de data '${value}' parece inválido para o formato ${dateFormat}.`);
+                     }
+                     // Value is already formatted by calculateFieldValue
+                 } catch (e) {
+                     console.error(`Erro ao re-validar data calculada ${value}`, e);
+                     value = ''; // Clear invalid calculated date
+                 }
+             }
+
+          } else { // Mapped field
              mapping = columnMappings.find(m => m.mappedField === outputField.mappedField);
              if (!mapping || !mapping.originalHeader || !fileData || fileData.length === 0) {
                  if(fileData && fileData.length > 0) console.warn(`Mapeamento não encontrado para o campo de saída: ${outputField.mappedField}`);
@@ -1192,108 +1699,66 @@ export default function Home() {
                                 let parsedDate: Date | null = null;
                                 let cleanedValue = value;
 
-                                if (!mapping?.removeMask && value) {
+                                if (mapping?.removeMask && value) { // Use removeMask setting
                                     cleanedValue = value.replace(/[^\d]/g, '');
                                 }
 
                                 let year = '', month = '', day = '';
 
-                                if (cleanedValue.length === 8) {
-                                    const part1 = cleanedValue.substring(0, 2);
-                                    const part2 = cleanedValue.substring(2, 4);
-                                    const part3 = cleanedValue.substring(4, 8);
-                                    const part4 = cleanedValue.substring(0, 4);
-                                    const part5 = cleanedValue.substring(4, 6);
-                                    const part6 = cleanedValue.substring(6, 8);
-
-                                    if (parseInt(part4) > 1900 && parseInt(part4) < 2100 && parseInt(part5) >= 1 && parseInt(part5) <= 12 && parseInt(part6) >= 1 && parseInt(part6) <= 31) {
-                                        year = part4; month = part5; day = part6;
-                                    }
-                                    else if (parseInt(part1) >= 1 && parseInt(part1) <= 31 && parseInt(part2) >= 1 && parseInt(part2) <= 12 && parseInt(part3) > 1900 && parseInt(part3) < 2100) {
-                                        day = part1; month = part2; year = part3;
-                                    }
-                                     else if (parseInt(part1) >= 1 && parseInt(part1) <= 12 && parseInt(part2) >= 1 && parseInt(part2) <= 31 && parseInt(part3) > 1900 && parseInt(part3) < 2100) {
-                                          month = part1; day = part2; year = part3;
-                                     }
-                                } else if (cleanedValue.length === 6) {
-                                    const part1 = cleanedValue.substring(0, 2);
-                                    const part2 = cleanedValue.substring(2, 4);
-                                    const part3 = cleanedValue.substring(4, 6);
-                                     if(parseInt(part1) >= 1 && parseInt(part1) <= 31 && parseInt(part2) >= 1 && parseInt(part2) <= 12) {
-                                         day = part1; month = part2; year = part3;
-                                     }
-                                      if (year.length === 2) {
-                                        year = (parseInt(year) < 70 ? '20' : '19') + year;
-                                      }
+                                // --- Enhanced Date Parsing ---
+                                // Try ISO format first (YYYY-MM-DD)
+                                if (/^\d{4}-\d{2}-\d{2}/.test(String(originalValue))) {
+                                     parsedDate = parse(String(originalValue).substring(0, 10), 'yyyy-MM-dd', new Date());
                                 }
 
-                                 if (!year && originalValue) {
-                                     const dateString = String(originalValue).trim();
-                                     const datePartsSlash = dateString.split('/');
-                                     const datePartsDash = dateString.split('-');
+                                // Try common formats if ISO fails or not present
+                                if (!parsedDate || !isValid(parsedDate)) {
+                                    const dateString = String(originalValue).trim();
+                                    const commonFormats = [
+                                        'dd/MM/yyyy', 'd/M/yyyy', 'dd-MM-yyyy', 'd-M-yyyy',
+                                        'MM/dd/yyyy', 'M/d/yyyy', 'MM-dd-yyyy', 'M-d-yyyy',
+                                        'yyyy/MM/dd', 'yyyy/M/d', 'yyyy-MM-dd', 'yyyy-M-d',
+                                        'dd/MM/yy', 'd/M/yy', 'dd-MM-yy', 'd-M-yy',
+                                        'MM/dd/yy', 'M/d/yy', 'MM-dd-yy', 'M-d-yy',
+                                        'yyyyMMdd', // Added unseparated formats
+                                        'ddMMyyyy'
+                                    ];
+                                    for (const fmt of commonFormats) {
+                                        parsedDate = parse(dateString, fmt, new Date());
+                                        if (isValid(parsedDate)) break; // Found a valid format
+                                    }
+                                }
 
-                                     if (datePartsSlash.length === 3) {
-                                         if (datePartsSlash[2].length === 4) {
-                                             day = datePartsSlash[0]; month = datePartsSlash[1]; year = datePartsSlash[2];
-                                         } else if (datePartsSlash[0].length === 4) {
-                                             year = datePartsSlash[0]; month = datePartsSlash[1]; day = datePartsSlash[2];
-                                         } else if (datePartsSlash[2].length === 2) {
-                                             day = datePartsSlash[0]; month = datePartsSlash[1]; year = datePartsSlash[2];
-                                              if(year.length === 2) year = (parseInt(year) < 70 ? '20' : '19') + year;
+                                // Handle purely numeric strings (cleaned value)
+                                if ((!parsedDate || !isValid(parsedDate)) && cleanedValue && /^\d+$/.test(cleanedValue)) {
+                                    if (cleanedValue.length === 8) {
+                                         // Try YYYYMMDD and DDMMYYYY
+                                         parsedDate = parse(cleanedValue, 'yyyyMMdd', new Date());
+                                         if (!isValid(parsedDate)) {
+                                             parsedDate = parse(cleanedValue, 'ddMMyyyy', new Date());
                                          }
-                                     } else if (datePartsDash.length === 3) {
-                                         if (datePartsDash[0].length === 4) {
-                                             year = datePartsDash[0]; month = datePartsDash[1]; day = datePartsDash[2];
-                                         } else if (datePartsDash[2].length === 4) {
-                                             day = datePartsDash[0]; month = datePartsDash[1]; year = datePartsDash[2];
-                                         } else if (datePartsDash[2].length === 2) {
-                                             day = datePartsDash[0]; month = datePartsDash[1]; year = datePartsDash[2];
-                                             if(year.length === 2) year = (parseInt(year) < 70 ? '20' : '19') + year;
+                                    } else if (cleanedValue.length === 6) {
+                                         // Try YYMMDD and DDMMYY (assume 20xx/19xx based on year)
+                                         parsedDate = parse(cleanedValue, 'yyMMdd', new Date());
+                                          if (!isValid(parsedDate)) {
+                                             parsedDate = parse(cleanedValue, 'ddMMyy', new Date());
                                          }
-                                     }
-                                 }
-
-
-                                if (year && month && day && parseInt(year) > 0 && parseInt(month) >= 1 && parseInt(month) <= 12 && parseInt(day) >= 1 && parseInt(day) <= 31) {
-                                    const paddedMonth = month.padStart(2, '0');
-                                    const paddedDay = day.padStart(2, '0');
-                                    parsedDate = new Date(Date.UTC(parseInt(year), parseInt(paddedMonth) - 1, parseInt(paddedDay)));
-
-                                    if (!parsedDate || isNaN(parsedDate.getTime()) || parsedDate.getUTCFullYear() !== parseInt(year) || (parsedDate.getUTCMonth() + 1) !== parseInt(paddedMonth) || parsedDate.getUTCDate() !== parseInt(paddedDay) ) {
-                                         parsedDate = null;
-                                         if (year && month && day) console.warn(`Validação de data falhou para partes: D=${day}, M=${month}, Y=${year}`);
-                                    }
-                                } else if (year || month || day) {
-                                     console.warn(`Partes de data inválidas extraídas: D=${day}, M=${month}, Y=${year}`);
-                                }
-
-
-                                if ((!parsedDate || isNaN(parsedDate.getTime())) && originalValue) {
-                                    if (String(originalValue).trim() && /[0-9]/.test(String(originalValue))) {
-                                        let attemptOriginalParse = new Date(originalValue);
-                                         if (attemptOriginalParse && !isNaN(attemptOriginalParse.getTime()) && attemptOriginalParse.getFullYear() > 1000 && attemptOriginalParse.getFullYear() < 3000) {
-                                            parsedDate = attemptOriginalParse;
-                                            console.log("Data analisada usando fallback:", parsedDate);
-                                        } else {
-                                             console.warn(`Análise de data de fallback falhou ou resultou em data inválida para: ${originalValue}`);
-                                        }
                                     }
                                 }
 
 
-                                if (parsedDate && !isNaN(parsedDate.getTime())) {
-                                     const useUTC = parsedDate.getUTCHours() === 0 && parsedDate.getUTCMinutes() === 0;
-                                     const y = useUTC ? parsedDate.getUTCFullYear() : parsedDate.getFullYear();
-                                     const m = String((useUTC ? parsedDate.getUTCMonth() : parsedDate.getMonth()) + 1).padStart(2, '0');
-                                     const d = String(useUTC ? parsedDate.getUTCDate() : parsedDate.getDate()).padStart(2, '0');
+                                if (parsedDate && isValid(parsedDate)) {
+                                     const y = parsedDate.getFullYear();
+                                     const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
+                                     const d = String(parsedDate.getDate()).padStart(2, '0');
 
-                                    const dateFormat = outputField.dateFormat || 'YYYYMMDD';
+                                    const dateFormat = outputField.dateFormat || 'YYYYMMDD'; // Default if not set
 
                                      value = dateFormat === 'YYYYMMDD' ? `${y}${m}${d}` : `${d}${m}${y}`;
-                                } else if (value) {
-                                    console.warn(`Não foi possível analisar a data: ${originalValue} (limpo: ${cleanedValue}). Gerando vazio.`);
+                                } else if (value) { // If parsing failed but there was input
+                                    console.warn(`Não foi possível analisar a data: ${originalValue}. Gerando vazio.`);
                                     value = '';
-                                } else {
+                                } else { // If input was empty
                                     value = '';
                                 }
 
@@ -1316,53 +1781,67 @@ export default function Home() {
              const padChar = outputField.paddingChar || getDefaultPaddingChar(outputField, columnMappings);
              const padDir = outputField.paddingDirection || getDefaultPaddingDirection(outputField, columnMappings);
              let processedValue = String(value ?? '');
+             let effectiveDataType = dataType; // Use mapped/guessed type
+              if (outputField.isStatic) {
+                  // Refine type guess for static fields for padding
+                  effectiveDataType = /^-?\d+$/.test(outputField.staticValue) ? 'Inteiro' : /^-?\d+(\.|,)\d+$/.test(outputField.staticValue) ? 'Numérico' : 'Alfanumérico';
+              } else if (outputField.isCalculated) {
+                   // Use the determined type for calculated fields
+                   effectiveDataType = dataType; // dataType was set based on calc type
+              }
+
 
              if (len > 0) {
                  if (processedValue.length > len) {
-                      console.warn(`Truncando valor "${processedValue}" para o campo ${outputField.isStatic ? outputField.fieldName : outputField.mappedField} pois excede o tamanho ${len}`);
-                      if (padDir === 'left' && (dataType === 'Numérico' || dataType === 'Inteiro' || (outputField.isStatic && /^-?\d/.test(processedValue)))) {
+                      console.warn(`Truncando valor "${processedValue}" para o campo ${outputField.isStatic ? outputField.fieldName : outputField.isCalculated ? outputField.fieldName : outputField.mappedField} pois excede o tamanho ${len}`);
+                       // Numeric left-padding truncation needs special handling for sign
+                      if (padDir === 'left' && (effectiveDataType === 'Numérico' || effectiveDataType === 'Inteiro' )) {
                           const isNegative = processedValue.startsWith('-');
                           const absValue = isNegative ? processedValue.substring(1) : processedValue;
-                           const targetLength = isNegative ? len - 1 : len;
+                           const targetLength = isNegative ? len - 1 : len; // Account for sign
 
-                           if (targetLength <= 0) {
+                           if (targetLength <= 0) { // If length is too small even for the sign
                                processedValue = isNegative ? '-' : '';
-                               if (processedValue.length > len) processedValue = processedValue.substring(0, len);
+                               if (processedValue.length > len) processedValue = processedValue.substring(0, len); // Should not happen, but safeguard
                            } else {
+                               // Truncate from the LEFT (most significant digits) for numeric right alignment
                                const truncatedAbs = absValue.substring(absValue.length - targetLength);
                                processedValue = isNegative ? '-' + truncatedAbs : truncatedAbs;
                            }
 
-                      } else {
+                      } else { // Truncate from the RIGHT for text or right-padded numbers
                          processedValue = processedValue.substring(0, len);
                       }
 
                  } else if (processedValue.length < len) {
                      const padLen = len - processedValue.length;
                      if (padDir === 'left') {
+                          // Handle negative numbers with '0' padding correctly
                          if (processedValue.startsWith('-') && padChar === '0') {
                              processedValue = '-' + padChar.repeat(padLen) + processedValue.substring(1);
                          } else {
                              processedValue = padChar.repeat(padLen) + processedValue;
                          }
-                     } else {
+                     } else { // padDir === 'right'
                          processedValue = processedValue + padChar.repeat(padLen);
                      }
                  }
+                  // Final length check after padding/truncation (especially for negative number padding)
                   if (processedValue.length > len) {
-                       console.warn(`Re-truncando valor "${processedValue}" para o tamanho ${len} após preenchimento`);
+                       console.warn(`Re-truncando valor "${processedValue}" para o tamanho ${len} após preenchimento/tratamento de sinal.`);
                        if (padDir === 'left') {
-                           processedValue = processedValue.slice(-len);
+                           processedValue = processedValue.slice(-len); // Take the rightmost characters
                        } else {
-                            processedValue = processedValue.slice(0, len);
+                            processedValue = processedValue.slice(0, len); // Take the leftmost characters
                        }
 
                   } else if (processedValue.length < len && padDir === 'left') {
+                      // Ensure left padding didn't miss anything (e.g., if initial value was empty)
                        processedValue = padChar.repeat(len - processedValue.length) + processedValue;
                   }
 
 
-             } else {
+             } else { // len <= 0
                  processedValue = '';
              }
 
@@ -1374,7 +1853,8 @@ export default function Home() {
               line += outputConfig.delimiter;
             }
              let csvValue = String(value ?? '');
-              if (dataType === 'Numérico') {
+             // Convert decimal separator for CSV if numeric
+              if ((dataType === 'Numérico') || (outputField.isStatic && /^-?\d+(\.|,)\d+$/.test(outputField.staticValue))) {
                     csvValue = csvValue.replace('.', ',');
               }
 
@@ -1388,7 +1868,7 @@ export default function Home() {
         resultString += line + '\n';
       });
 
-        const resultBuffer = iconv.encode(resultString.trimEnd(), outputEncoding);
+        const resultBuffer = iconv.encode(resultString.trimEnd(), outputConfig.encoding); // Use encoding from config
         setConvertedData(resultBuffer);
 
       setActiveTab("result");
@@ -1428,9 +1908,10 @@ export default function Home() {
         const { finalFilename } = downloadDialogState;
         if (!convertedData || !finalFilename) return;
 
+        const encoding = outputConfig.encoding.toLowerCase(); // Use encoding from config
         const mimeType = outputConfig.format === 'txt'
-            ? `text/plain;charset=${outputEncoding.toLowerCase()}`
-            : `text/csv;charset=${outputEncoding.toLowerCase()}`;
+            ? `text/plain;charset=${encoding}`
+            : `text/csv;charset=${encoding}`;
 
          const blob = convertedData instanceof Buffer
              ? new Blob([convertedData], { type: mimeType })
@@ -1448,6 +1929,95 @@ export default function Home() {
         setDownloadDialogState({ isOpen: false, proposedFilename: '', finalFilename: '' });
     };
 
+     // --- Configuration Management ---
+    const openConfigDialog = (action: 'save' | 'load') => {
+        setConfigManagementDialogState({
+            isOpen: true,
+            action: action,
+            configName: action === 'save' ? (outputConfig.name || `Nova Config ${savedConfigs.length + 1}`) : '',
+            selectedConfigToLoad: null,
+        });
+    };
+
+    const handleConfigDialogChange = (field: keyof ConfigManagementDialogState, value: any) => {
+        setConfigManagementDialogState(prev => ({
+            ...prev,
+            [field]: value === NONE_VALUE_PLACEHOLDER ? null : value,
+        }));
+    };
+
+    const saveCurrentConfig = () => {
+        const { configName } = configManagementDialogState;
+        if (!configName.trim()) {
+            toast({ title: "Erro", description: "Nome da configuração não pode ser vazio.", variant: "destructive" });
+            return;
+        }
+
+        const configToSave: OutputConfig = {
+            ...outputConfig,
+            name: configName.trim(),
+        };
+
+        setSavedConfigs(prev => {
+            const existingIndex = prev.findIndex(c => c.name === configToSave.name);
+            let updatedConfigs;
+            if (existingIndex > -1) {
+                // Update existing config
+                updatedConfigs = [...prev];
+                updatedConfigs[existingIndex] = configToSave;
+                 toast({ title: "Sucesso", description: `Configuração "${configToSave.name}" atualizada.` });
+            } else {
+                // Add new config
+                updatedConfigs = [...prev, configToSave];
+                 toast({ title: "Sucesso", description: `Configuração "${configToSave.name}" salva.` });
+            }
+            saveAllConfigs(updatedConfigs); // Persist to localStorage
+            return updatedConfigs;
+        });
+        setOutputConfig(configToSave); // Update current config name in state
+        setConfigManagementDialogState({ isOpen: false, action: null, configName: '', selectedConfigToLoad: null });
+    };
+
+    const loadSelectedConfig = () => {
+        const { selectedConfigToLoad } = configManagementDialogState;
+        if (!selectedConfigToLoad) {
+            toast({ title: "Erro", description: "Selecione uma configuração para carregar.", variant: "destructive" });
+            return;
+        }
+
+        const config = savedConfigs.find(c => c.name === selectedConfigToLoad);
+        if (!config) {
+            toast({ title: "Erro", description: "Configuração selecionada não encontrada.", variant: "destructive" });
+            return;
+        }
+
+        setOutputConfig(config); // Load the selected config into the main state
+        setConfigManagementDialogState({ isOpen: false, action: null, configName: '', selectedConfigToLoad: null });
+        toast({ title: "Sucesso", description: `Configuração "${config.name}" carregada.` });
+        // Optionally, trigger re-evaluation based on loaded config?
+         // Re-run the effect that depends on columnMappings and format
+         // This might need adjustment based on how the effect is structured.
+    };
+
+    const deleteConfig = (configNameToDelete: string) => {
+        if (!configNameToDelete) return;
+
+         const confirmed = window.confirm(`Tem certeza que deseja excluir a configuração "${configNameToDelete}"? Esta ação não pode ser desfeita.`);
+        if (!confirmed) return;
+
+
+        setSavedConfigs(prev => {
+            const updatedConfigs = prev.filter(c => c.name !== configNameToDelete);
+            saveAllConfigs(updatedConfigs); // Persist changes
+            return updatedConfigs;
+        });
+         setConfigManagementDialogState(prev => ({
+             ...prev,
+             selectedConfigToLoad: prev.selectedConfigToLoad === configNameToDelete ? null : prev.selectedConfigToLoad // Deselect if it was selected
+         }));
+        toast({ title: "Sucesso", description: `Configuração "${configNameToDelete}" excluída.` });
+    };
+
   // Memoized list of predefined fields available for mapping dropdowns
   const memoizedPredefinedFields = useMemo(() => {
       return [...predefinedFields] // Create a copy before sorting
@@ -1461,17 +2031,15 @@ export default function Home() {
 
 
  // Render helper for Output Field selection for MAPPED fields
- const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig) => {
-     if (currentField.isStatic) return null;
-
+ const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig & { isStatic: false, isCalculated: false }) => {
      const currentFieldMappedId = currentField.mappedField;
      const availableOptions = memoizedPredefinedFields
          .filter(pf =>
-             columnMappings.some(cm => cm.mappedField === pf.id)
+             columnMappings.some(cm => cm.mappedField === pf.id) // Only show fields that are actually mapped in step 2
          )
          .filter(pf =>
-              pf.id === currentFieldMappedId ||
-              !outputConfig.fields.some(of => !of.isStatic && of.mappedField === pf.id)
+              pf.id === currentFieldMappedId || // Allow selecting the current field
+              !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id) // Filter out fields already used in OTHER output slots
           );
 
 
@@ -1500,8 +2068,22 @@ export default function Home() {
      );
  };
 
+   // Helper to get data type for output field display/logic
+   const getOutputFieldDataType = (field: OutputFieldConfig): DataType | 'Calculado' | null => {
+       if (field.isStatic) return null; // Static fields don't have a direct mapping type
+       if (field.isCalculated) {
+            if (field.type === 'CalculateStartDate') return 'Data'; // Specific type for known calculations
+            return 'Calculado'; // Generic for others
+       }
+       // Mapped field
+       const mapping = columnMappings.find(cm => cm.mappedField === field.mappedField);
+       return mapping?.dataType ?? null;
+   };
+
  // --- Render ---
   return (
+    // Placeholder for Login/Dashboard - Render based on auth state later
+    // For now, directly render the conversion tool
     <div className="container mx-auto p-4 md:p-8 flex flex-col items-center min-h-screen bg-background">
       <Card className="w-full max-w-5xl shadow-lg">
         <CardHeader className="text-center">
@@ -1510,6 +2092,8 @@ export default function Home() {
           </CardTitle>
           <CardDescription className="text-muted-foreground">
             Converta seus arquivos Excel ou PDF(em teste) para layouts TXT ou CSV personalizados.
+             {/* Placeholder for future dashboard link */}
+            {/* <Button variant="link" onClick={() => alert('Ir para o Painel (Funcionalidade Futura)')}>Painel</Button> */}
           </CardDescription>
         </CardHeader>
 
@@ -1829,11 +2413,26 @@ export default function Home() {
                {!isProcessing && file && (
                  <div className="space-y-6">
                     <Card>
-                        <CardHeader>
-                             <CardTitle className="text-xl">Configuração do Arquivo de Saída</CardTitle>
-                             <CardDescription>Defina formato, codificação, delimitador (CSV), ordem e formatação dos campos.</CardDescription>
+                        <CardHeader className='pb-2'>
+                             <div className="flex justify-between items-center">
+                                 <div>
+                                     <CardTitle className="text-xl">Configuração do Arquivo de Saída</CardTitle>
+                                     <CardDescription>
+                                         Modelo: <span className="font-semibold text-foreground">{outputConfig.name || 'Não Salvo'}</span>.
+                                          Defina formato, codificação, delimitador (CSV), ordem e formatação dos campos.
+                                     </CardDescription>
+                                 </div>
+                                 <div className="flex gap-2">
+                                      <Button variant="outline" size="sm" onClick={() => openConfigDialog('save')} disabled={isProcessing}>
+                                          <Save className="mr-2 h-4 w-4" /> Salvar Modelo
+                                      </Button>
+                                      <Button variant="outline" size="sm" onClick={() => openConfigDialog('load')} disabled={isProcessing || savedConfigs.length === 0}>
+                                          <Server className="mr-2 h-4 w-4" /> Carregar Modelo
+                                      </Button>
+                                  </div>
+                             </div>
                          </CardHeader>
-                         <CardContent className="space-y-4">
+                         <CardContent className="space-y-4 pt-4">
                             <div className="flex flex-col md:flex-row gap-4 items-end">
                                 <div className="flex-1">
                                     <Label htmlFor="output-format">Formato de Saída</Label>
@@ -1868,8 +2467,8 @@ export default function Home() {
                                         </TooltipProvider>
                                        </div>
                                     <Select
-                                        value={outputEncoding}
-                                        onValueChange={(value) => setOutputEncoding(value as OutputEncoding)}
+                                        value={outputConfig.encoding} // Use value from config state
+                                        onValueChange={(value) => setOutputConfig(prev => ({ ...prev, encoding: value as OutputEncoding }))} // Update config state
                                         disabled={isProcessing}
                                     >
                                         <SelectTrigger id="output-encoding" className="w-full">
@@ -1915,12 +2514,12 @@ export default function Home() {
 
                              <div>
                                  <h3 className="text-lg font-medium mb-2">Campos de Saída</h3>
-                                  <p className="text-xs text-muted-foreground mb-2">Defina a ordem, conteúdo e formatação dos campos no arquivo final.</p>
+                                  <p className="text-xs text-muted-foreground mb-2">Defina a ordem, conteúdo e formatação dos campos no arquivo final. Use os botões <ArrowUp className='inline h-3 w-3'/> / <ArrowDown className='inline h-3 w-3'/> para reordenar.</p>
                                  <div className="max-h-[45vh] overflow-auto border rounded-md">
                                      <Table>
                                          <TableHeader>
                                              <TableRow>
-                                                  <TableHead className="w-[60px]">Ordem</TableHead>
+                                                  <TableHead className="w-[70px]">Ordem</TableHead>
                                                   <TableHead className="w-3/12">Campo</TableHead>
                                                    <TableHead className="w-2/12">Formato Data</TableHead>
                                                   {outputConfig.format === 'txt' && (
@@ -1956,34 +2555,53 @@ export default function Home() {
                                                            </TableHead>
                                                       </>
                                                   )}
-                                                  <TableHead className={`w-[80px] text-right ${outputConfig.format === 'csv' ? 'pl-20' : ''}`}>Ações</TableHead>
+                                                  <TableHead className={`w-[100px] text-right ${outputConfig.format === 'csv' ? 'pl-20' : ''}`}>Ações</TableHead>
                                              </TableRow>
                                          </TableHeader>
                                          <TableBody>
-                                             {outputConfig.fields.map((field) => {
-                                                 const mapping = !field.isStatic ? columnMappings.find(cm => cm.mappedField === field.mappedField) : undefined;
-                                                 const dataType = mapping?.dataType ?? null;
-                                                 const isDateField = !field.isStatic && dataType === 'Data';
-                                                 const mappedFieldName = !field.isStatic ? predefinedFields.find(pf => pf.id === field.mappedField)?.name ?? field.mappedField : '';
+                                             {outputConfig.fields.map((field, index) => {
+                                                 // const mapping = !field.isStatic ? columnMappings.find(cm => cm.mappedField === field.mappedField) : undefined;
+                                                 // const dataType = mapping?.dataType ?? null;
+                                                 const dataType = getOutputFieldDataType(field);
+                                                 const isDateField = dataType === 'Data';
+                                                 const fieldNameDisplay = field.isStatic ? `${field.fieldName} (Estático)`
+                                                                          : field.isCalculated ? `${field.fieldName} (Calculado)`
+                                                                          : predefinedFields.find(pf => pf.id === field.mappedField)?.name ?? field.mappedField;
 
                                                  return (
                                                  <TableRow key={field.id}>
-                                                      <TableCell>
-                                                         <Input
+                                                      <TableCell className="flex items-center gap-1">
+                                                         {/* <Input
                                                              type="number"
                                                              min="0"
                                                              value={field.order}
                                                              onChange={(e) => handleOutputFieldChange(field.id, 'order', e.target.value)}
                                                              className="w-14 h-8 text-xs"
                                                              disabled={isProcessing}
-                                                             aria-label={`Ordem do campo ${field.isStatic ? field.fieldName : mappedFieldName}`}
-                                                         />
+                                                             aria-label={`Ordem do campo ${fieldNameDisplay}`}
+                                                         /> */}
+                                                         <span className="text-xs w-6 text-center">{index + 1}</span>
+                                                         <div className='flex flex-col'>
+                                                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => moveField(field.id, 'up')} disabled={isProcessing || index === 0} aria-label="Mover para cima">
+                                                                 <ArrowUp className="h-3 w-3" />
+                                                             </Button>
+                                                             <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => moveField(field.id, 'down')} disabled={isProcessing || index === outputConfig.fields.length - 1} aria-label="Mover para baixo">
+                                                                 <ArrowDown className="h-3 w-3" />
+                                                             </Button>
+                                                         </div>
                                                       </TableCell>
                                                      <TableCell className="text-xs">
                                                          {field.isStatic ? (
                                                              <div className="flex items-center gap-1">
                                                                 <span className="font-medium text-blue-600 dark:text-blue-400" title={`Valor: ${field.staticValue}`}>{field.fieldName} (Estático)</span>
                                                                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-accent" onClick={() => openEditStaticFieldDialog(field)} aria-label={`Editar campo estático ${field.fieldName}`}>
+                                                                     <Edit className="h-3 w-3" />
+                                                                 </Button>
+                                                             </div>
+                                                         ) : field.isCalculated ? (
+                                                              <div className="flex items-center gap-1">
+                                                                <span className="font-medium text-purple-600 dark:text-purple-400" title={`Tipo: ${field.type}`}>{field.fieldName} (Calculado)</span>
+                                                                <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-accent" onClick={() => openEditCalculatedFieldDialog(field)} aria-label={`Editar campo calculado ${field.fieldName}`}>
                                                                      <Edit className="h-3 w-3" />
                                                                  </Button>
                                                              </div>
@@ -1995,14 +2613,16 @@ export default function Home() {
                                                           <Select
                                                                value={field.dateFormat ?? ''}
                                                                onValueChange={(value) => handleOutputFieldChange(field.id, 'dateFormat', value)}
-                                                               disabled={isProcessing || !isDateField}
+                                                               disabled={isProcessing || !isDateField} // Disable if not a date field (mapped or calculated)
                                                             >
                                                                 <SelectTrigger className={`w-full h-8 text-xs ${!isDateField ? 'invisible' : ''}`}>
                                                                     <SelectValue placeholder="Formato Data" />
                                                                 </SelectTrigger>
                                                                 <SelectContent>
-                                                                    <SelectItem value="YYYYMMDD">AAAAMMDD</SelectItem>
-                                                                    <SelectItem value="DDMMYYYY">DDMMAAAA</SelectItem>
+                                                                     <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                                                    {DATE_FORMATS.map(df => (
+                                                                         <SelectItem key={df} value={df}>{df === 'YYYYMMDD' ? 'AAAAMMDD' : 'DDMMAAAA'}</SelectItem>
+                                                                    ))}
                                                                 </SelectContent>
                                                           </Select>
                                                      </TableCell>
@@ -2018,7 +2638,7 @@ export default function Home() {
                                                                  className="w-full h-8 text-xs"
                                                                  required
                                                                  disabled={isProcessing}
-                                                                 aria-label={`Tamanho do campo ${field.isStatic ? field.fieldName : mappedFieldName}`}
+                                                                 aria-label={`Tamanho do campo ${fieldNameDisplay}`}
                                                              />
                                                           </TableCell>
                                                           <TableCell>
@@ -2031,7 +2651,7 @@ export default function Home() {
                                                                 className="w-10 text-center h-8 text-xs"
                                                                  required
                                                                 disabled={isProcessing}
-                                                                aria-label={`Caractere de preenchimento do campo ${field.isStatic ? field.fieldName : mappedFieldName}`}
+                                                                aria-label={`Caractere de preenchimento do campo ${fieldNameDisplay}`}
                                                              />
                                                          </TableCell>
                                                          <TableCell>
@@ -2061,7 +2681,7 @@ export default function Home() {
                                                                              onClick={() => removeOutputField(field.id)}
                                                                              disabled={isProcessing}
                                                                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                                                             aria-label={`Remover campo ${field.isStatic ? field.fieldName : mappedFieldName} da saída`}
+                                                                             aria-label={`Remover campo ${fieldNameDisplay} da saída`}
                                                                          >
                                                                              <Trash2 className="h-4 w-4" />
                                                                          </Button>
@@ -2086,12 +2706,15 @@ export default function Home() {
                                      </Table>
                                   </div>
                                    <div className="flex gap-2 mt-2">
-                                      <Button onClick={addOutputField} variant="outline" size="sm" disabled={isProcessing || columnMappings.filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && of.mappedField === m.mappedField)).length === 0}>
+                                      <Button onClick={addOutputField} variant="outline" size="sm" disabled={isProcessing || columnMappings.filter(m => m.mappedField !== null && !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === m.mappedField)).length === 0}>
                                           <Plus className="mr-2 h-4 w-4" /> Adicionar Campo Mapeado
                                       </Button>
                                       <Button onClick={openAddStaticFieldDialog} variant="outline" size="sm" disabled={isProcessing}>
                                           <Plus className="mr-2 h-4 w-4" /> Adicionar Campo Estático
                                       </Button>
+                                       <Button onClick={openAddCalculatedFieldDialog} variant="outline" size="sm" disabled={isProcessing}>
+                                            <Calculator className="mr-2 h-4 w-4" /> Adicionar Campo Calculado
+                                       </Button>
                                    </div>
                              </div>
                          </CardContent>
@@ -2132,14 +2755,14 @@ export default function Home() {
                          <CardHeader>
                              <CardTitle className="text-xl">Resultado da Conversão</CardTitle>
                              <CardDescription>
-                                Pré-visualização do arquivo convertido ({outputConfig.format.toUpperCase()}, {outputEncoding}). Verifique antes de baixar.
+                                Pré-visualização do arquivo convertido ({outputConfig.format.toUpperCase()}, {outputConfig.encoding}). Verifique antes de baixar.
                              </CardDescription>
                          </CardHeader>
                          <CardContent>
                              <Textarea
                                  readOnly
                                  value={convertedData instanceof Buffer
-                                          ? iconv.decode(convertedData, outputEncoding)
+                                          ? iconv.decode(convertedData, outputConfig.encoding) // Use encoding from config
                                           : String(convertedData) }
                                  className="w-full h-64 font-mono text-xs bg-secondary/30 border rounded-md"
                                  placeholder="Resultado da conversão aparecerá aqui..."
@@ -2184,7 +2807,6 @@ export default function Home() {
                        Defina um campo com valor fixo para incluir no arquivo de saída.
                     </DialogDescription>
                 </DialogHeader>
-                {/* Improved Layout for Dialog */}
                  <div className="grid gap-4 py-4">
                     <div className="space-y-2">
                         <Label htmlFor="static-field-name">Nome*</Label>
@@ -2275,7 +2897,6 @@ export default function Home() {
                           Defina se o campo será Principal (mantido para futuras conversões) ou Opcional.
                      </DialogDescription>
                  </DialogHeader>
-                 {/* Improved Layout */}
                  <div className="grid gap-4 py-4">
                      <div className="space-y-2">
                          <Label htmlFor="predefined-field-name">Nome*</Label>
@@ -2333,6 +2954,183 @@ export default function Home() {
              </DialogContent>
          </Dialog>
 
+        {/* Add/Edit Calculated Field Dialog */}
+        <Dialog open={calculatedFieldDialogState.isOpen} onOpenChange={(isOpen) => setCalculatedFieldDialogState(prev => ({ ...prev, isOpen }))}>
+            <DialogContent className="sm:max-w-[500px]"> {/* Slightly wider for more content */}
+                <DialogHeader>
+                    <DialogTitle>{calculatedFieldDialogState.isEditing ? 'Editar' : 'Adicionar'} Campo Calculado</DialogTitle>
+                    <DialogDescription>
+                        Defina um campo cujo valor é calculado com base em outros campos mapeados ou parâmetros.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto pr-2"> {/* Scrollable content */}
+                    <div className="space-y-2">
+                        <Label htmlFor="calc-field-name">Nome do Campo*</Label>
+                        <Input
+                            id="calc-field-name"
+                            value={calculatedFieldDialogState.fieldName}
+                            onChange={(e) => handleCalculatedFieldDialogChange('fieldName', e.target.value)}
+                            placeholder="Ex: Data Início Contrato"
+                            required
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="calc-field-type">Tipo de Cálculo*</Label>
+                        <Select
+                            value={calculatedFieldDialogState.type || NONE_VALUE_PLACEHOLDER}
+                            onValueChange={(value) => handleCalculatedFieldDialogChange('type', value)}
+                            required
+                        >
+                            <SelectTrigger id="calc-field-type">
+                                <SelectValue placeholder="Selecione o tipo..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                <SelectItem value="CalculateStartDate">Calcular Data Inicial (Periodo - Parc. Pagas)</SelectItem>
+                                {/* Add other calculation types here */}
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    {/* Conditional Inputs based on Type */}
+                    {calculatedFieldDialogState.type === 'CalculateStartDate' && (
+                        <>
+                            <div className="space-y-2 p-3 border rounded-md bg-muted/50">
+                                <h4 className="text-sm font-medium mb-2">Parâmetros para "Calcular Data Inicial"</h4>
+                                <div className="space-y-2">
+                                    <Label htmlFor="calc-param-period">Período Atual* (DD/MM/AAAA)</Label>
+                                    <Input
+                                        id="calc-param-period"
+                                        value={calculatedFieldDialogState.parameters.period || ''}
+                                        onChange={(e) => handleCalculatedFieldDialogChange('parameters.period', e.target.value)}
+                                        placeholder="Ex: 31/12/2024"
+                                        required
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="calc-req-parcelas">Campo Mapeado "Parcelas Pagas"*</Label>
+                                    <Select
+                                        value={calculatedFieldDialogState.requiredInputFields.parcelasPagas || NONE_VALUE_PLACEHOLDER}
+                                        onValueChange={(value) => handleCalculatedFieldDialogChange('requiredInputFields.parcelasPagas', value)}
+                                        required
+                                    >
+                                        <SelectTrigger id="calc-req-parcelas">
+                                            <SelectValue placeholder="Selecione o campo..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                            {columnMappings
+                                                .filter(m => m.mappedField && (m.dataType === 'Inteiro' || m.dataType === 'Numérico')) // Suggest relevant types
+                                                .map(m => {
+                                                    const predefined = predefinedFields.find(pf => pf.id === m.mappedField);
+                                                    return (
+                                                        <SelectItem key={m.mappedField!} value={m.mappedField!}>
+                                                            {predefined?.name ?? m.mappedField} (Coluna: {m.originalHeader})
+                                                        </SelectItem>
+                                                    );
+                                                })}
+                                             {columnMappings.filter(m => m.mappedField && !(m.dataType === 'Inteiro' || m.dataType === 'Numérico')).length > 0 && (
+                                                 <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>--- Outros Campos Mapeados ---</SelectItem>
+                                             )}
+                                              {columnMappings
+                                                .filter(m => m.mappedField && !(m.dataType === 'Inteiro' || m.dataType === 'Numérico'))
+                                                .map(m => {
+                                                    const predefined = predefinedFields.find(pf => pf.id === m.mappedField);
+                                                    return (
+                                                        <SelectItem key={m.mappedField!} value={m.mappedField!}>
+                                                            {predefined?.name ?? m.mappedField} (Coluna: {m.originalHeader})
+                                                        </SelectItem>
+                                                    );
+                                                })}
+                                        </SelectContent>
+                                    </Select>
+                                    <p className='text-xs text-muted-foreground'>Selecione o campo que contém o número de parcelas pagas.</p>
+                                </div>
+                                <div className="space-y-2">
+                                     <Label htmlFor="calc-date-format">Formato da Data de Saída*</Label>
+                                     <Select
+                                         value={calculatedFieldDialogState.dateFormat || NONE_VALUE_PLACEHOLDER}
+                                         onValueChange={(value) => handleCalculatedFieldDialogChange('dateFormat', value)}
+                                         required
+                                     >
+                                         <SelectTrigger id="calc-date-format">
+                                             <SelectValue placeholder="Selecione..." />
+                                         </SelectTrigger>
+                                         <SelectContent>
+                                             <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                              {DATE_FORMATS.map(df => (
+                                                   <SelectItem key={df} value={df}>{df === 'YYYYMMDD' ? 'AAAAMMDD' : 'DDMMAAAA'}</SelectItem>
+                                              ))}
+                                         </SelectContent>
+                                     </Select>
+                                 </div>
+                            </div>
+                        </>
+                    )}
+                    {/* Add blocks for other calculation types here */}
+
+
+                    {/* Common Output Formatting */}
+                     {outputConfig.format === 'txt' && (
+                         <div className="p-3 border rounded-md bg-muted/50 space-y-4">
+                              <h4 className="text-sm font-medium mb-2">Formatação de Saída (TXT)</h4>
+                              <div className="space-y-2">
+                                 <Label htmlFor="calc-field-length">Tamanho* (TXT)</Label>
+                                 <Input
+                                     id="calc-field-length"
+                                     type="number"
+                                     min="1"
+                                     value={calculatedFieldDialogState.length}
+                                     onChange={(e) => handleCalculatedFieldDialogChange('length', e.target.value)}
+                                     required
+                                     placeholder="Obrigatório para TXT"
+                                 />
+                              </div>
+                             <div className="grid grid-cols-2 gap-4">
+                                 <div className="space-y-2">
+                                     <Label htmlFor="calc-field-padding-char">Preencher* (TXT)</Label>
+                                     <Input
+                                         id="calc-field-padding-char"
+                                         type="text"
+                                         maxLength={1}
+                                         value={calculatedFieldDialogState.paddingChar}
+                                         onChange={(e) => handleCalculatedFieldDialogChange('paddingChar', e.target.value)}
+                                         className="text-center"
+                                         required
+                                          placeholder={getDefaultPaddingChar({ isCalculated: true, id: '', order: 0, type: 'CalculateStartDate', fieldName: '', requiredInputFields: [] }, columnMappings)} // Example placeholder
+                                     />
+                                 </div>
+                                 <div className="space-y-2">
+                                     <Label htmlFor="calc-field-padding-direction">Direção* (TXT)</Label>
+                                      <Select
+                                            value={calculatedFieldDialogState.paddingDirection}
+                                            onValueChange={(value) => handleCalculatedFieldDialogChange('paddingDirection', value)}
+                                         >
+                                            <SelectTrigger id="calc-field-padding-direction">
+                                                 <SelectValue />
+                                             </SelectTrigger>
+                                             <SelectContent>
+                                                  <SelectItem value="left">Esquerda</SelectItem>
+                                                  <SelectItem value="right">Direita</SelectItem>
+                                              </SelectContent>
+                                       </Select>
+                                   </div>
+                              </div>
+                         </div>
+                     )}
+                      <p className="text-xs text-muted-foreground">* Campos obrigatórios.</p>
+                </div>
+                <DialogFooter>
+                    <DialogClose asChild>
+                        <Button type="button" variant="outline">Cancelar</Button>
+                    </DialogClose>
+                    <Button type="button" onClick={saveCalculatedField}>Salvar Campo Calculado</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
+
        {/* Download File Dialog */}
         <Dialog open={downloadDialogState.isOpen} onOpenChange={(isOpen) => setDownloadDialogState(prev => ({ ...prev, isOpen }))}>
             <DialogContent className="sm:max-w-[425px]">
@@ -2342,7 +3140,6 @@ export default function Home() {
                        Confirme ou altere o nome do arquivo antes de baixar.
                     </DialogDescription>
                 </DialogHeader>
-                {/* Improved Layout */}
                 <div className="space-y-4 py-4">
                    <div className="space-y-2">
                         <Label htmlFor="download-filename">Nome do Arquivo</Label>
@@ -2363,6 +3160,80 @@ export default function Home() {
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+
+         {/* Save/Load Configuration Dialog */}
+        <Dialog open={configManagementDialogState.isOpen} onOpenChange={(isOpen) => setConfigManagementDialogState(prev => ({ ...prev, isOpen }))}>
+             <DialogContent className="sm:max-w-[425px]">
+                 <DialogHeader>
+                     <DialogTitle>{configManagementDialogState.action === 'save' ? 'Salvar' : 'Carregar'} Modelo de Configuração</DialogTitle>
+                     <DialogDescription>
+                         {configManagementDialogState.action === 'save'
+                             ? 'Digite um nome para salvar a configuração atual (formato, campos, etc.). Se o nome já existir, ele será sobrescrito.'
+                             : 'Selecione um modelo salvo para carregar suas configurações.'}
+                     </DialogDescription>
+                 </DialogHeader>
+                 <div className="grid gap-4 py-4">
+                     {configManagementDialogState.action === 'save' && (
+                         <div className="space-y-2">
+                             <Label htmlFor="config-name">Nome do Modelo*</Label>
+                             <Input
+                                 id="config-name"
+                                 value={configManagementDialogState.configName}
+                                 onChange={(e) => handleConfigDialogChange('configName', e.target.value)}
+                                 placeholder="Ex: Layout Banco X v1"
+                                 required
+                             />
+                         </div>
+                     )}
+                     {configManagementDialogState.action === 'load' && (
+                         <div className="space-y-2">
+                             <Label htmlFor="config-load-select">Selecionar Modelo*</Label>
+                             <Select
+                                 value={configManagementDialogState.selectedConfigToLoad || NONE_VALUE_PLACEHOLDER}
+                                 onValueChange={(value) => handleConfigDialogChange('selectedConfigToLoad', value)}
+                                 required
+                             >
+                                 <SelectTrigger id="config-load-select">
+                                     <SelectValue placeholder="Selecione um modelo..." />
+                                 </SelectTrigger>
+                                 <SelectContent>
+                                     <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
+                                     {savedConfigs.map(config => (
+                                          <SelectItem key={config.name} value={config.name!}>
+                                              {config.name}
+                                             {/* Add delete button here maybe? Or in a separate manage screen */}
+                                              <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-5 w-5 ml-2 text-destructive hover:bg-destructive/10 float-right"
+                                                  onClick={(e) => { e.stopPropagation(); deleteConfig(config.name!); }}
+                                                  aria-label={`Excluir modelo ${config.name}`}
+                                              >
+                                                  <Trash2 className="h-3 w-3"/>
+                                              </Button>
+                                         </SelectItem>
+                                     ))}
+                                     {savedConfigs.length === 0 && <SelectItem value="no-configs" disabled>Nenhum modelo salvo.</SelectItem>}
+                                 </SelectContent>
+                             </Select>
+                         </div>
+                     )}
+                     <p className="text-xs text-muted-foreground">* Campo obrigatório.</p>
+                 </div>
+                 <DialogFooter>
+                     <DialogClose asChild>
+                         <Button type="button" variant="outline">Cancelar</Button>
+                     </DialogClose>
+                     {configManagementDialogState.action === 'save' && (
+                         <Button type="button" onClick={saveCurrentConfig} disabled={!configManagementDialogState.configName.trim()}>Salvar Modelo</Button>
+                     )}
+                     {configManagementDialogState.action === 'load' && (
+                         <Button type="button" onClick={loadSelectedConfig} disabled={!configManagementDialogState.selectedConfigToLoad}>Carregar Modelo</Button>
+                     )}
+                 </DialogFooter>
+             </DialogContent>
+         </Dialog>
+
 
     </div>
   );
