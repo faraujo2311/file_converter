@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,7 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"; // Import Popover
 
 
-// NOTE (v1.2.0): Full authentication, RBAC, admin panel, user-specific backend storage,
+// NOTE (v1.1.0): Full authentication, RBAC, admin panel, user-specific backend storage,
 // captcha, IP logging, session management features, LGPD compliance measures (beyond disclaimer),
 // and draggable reordering requested for v1.1.0 are DEFERRED.
 // These features require significant backend architecture changes (e.g., adding Firebase Auth/Firestore)
@@ -42,7 +42,7 @@ type PredefinedField = {
     isCore: boolean; // True for original, hardcoded fields
     comment?: string;
     isPersistent?: boolean; // Tracks if a custom field is saved in localStorage
-    group?: string; // For grouping in select dropdowns
+    group?: string; // For grouping in select
 };
 type ColumnMapping = {
   originalHeader: string;
@@ -144,56 +144,50 @@ type ConfigManagementDialogState = {
     selectedConfigToLoad: string | null;
 }
 
-const PREDEFINED_FIELD_GROUPS = {
-    PADRAO: "Padrão",
-    MARGEM: "Margem",
-    HISTORICO_RETORNO: "Histórico/Retorno",
-    CUSTOM: "Personalizado" // For user-added fields not fitting other groups
-};
 
+const CORE_PREDEFINED_FIELDS_UNSORTED: PredefinedField[] = [
+  { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.', group: 'Padrão', isPersistent: true },
+  { id: 'cpf', name: 'CPF', isCore: true, comment: 'Cadastro de Pessoa Física. Será formatado sem máscara na saída se a opção estiver marcada.', group: 'Padrão', isPersistent: true },
+  { id: 'rg', name: 'RG', isCore: true, comment: 'Registro Geral (Identidade). Pode conter letras e números.', group: 'Padrão', isPersistent: true },
+  { id: 'nome', name: 'Nome', isCore: true, comment: 'Nome completo.', group: 'Padrão', isPersistent: true },
+  { id: 'email', name: 'E-mail', isCore: true, comment: 'Endereço de e-mail.', group: 'Margem', isPersistent: true },
+  { id: 'cnpj', name: 'CNPJ', isCore: true, comment: 'Cadastro Nacional da Pessoa Jurídica. Será formatado sem máscara na saída se a opção estiver marcada.', group: 'Padrão', isPersistent: true },
+  { id: 'regime', name: 'Regime', isCore: true, comment: 'Regime de contratação (ex: CLT, Estatutário).', group: 'Margem', isPersistent: true },
+  { id: 'situacao_usuario', name: 'Situação do Usuário', isCore: true, comment: 'Situação do usuário/servidor (ex: Ativo, Inativo, Licença).', group: 'Margem', isPersistent: true },
+  { id: 'categoria', name: 'Categoria', isCore: true, comment: 'Categoria funcional.', group: 'Margem', isPersistent: true },
+  { id: 'secretaria', name: 'Secretaria', isCore: true, comment: 'Secretaria ou órgão de lotação.', group: 'Margem', isPersistent: true },
+  { id: 'setor', name: 'Setor', isCore: true, comment: 'Setor ou departamento específico.', group: 'Margem', isPersistent: true },
+  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).', group: 'Margem', isPersistent: true },
+  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).', group: 'Margem', isPersistent: true },
+  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).', group: 'Margem', isPersistent: true },
+  { id: 'parcelas_pagas', name: 'Parcelas Pagas', isCore: true, comment: 'Número de parcelas pagas de um contrato/empréstimo (Inteiro).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'data_nascimento', name: 'Data de Nascimento', isCore: true, comment: 'Data de nascimento do indivíduo (Data).', group: 'Margem', isPersistent: true },
+  { id: 'data_admissao', name: 'Data de Admissão', isCore: true, comment: 'Data de admissão na empresa/órgão (Data).', group: 'Margem', isPersistent: true },
+  { id: 'data_fim_contrato', name: 'Data Fim do Contrato', isCore: true, comment: 'Data de término do contrato, se aplicável (Data).', group: 'Margem', isPersistent: true },
+  { id: 'sinal_margem', name: 'Sinal da Margem', isCore: true, comment: 'Sinal indicativo da margem (+ ou -).', group: 'Margem', isPersistent: true },
+  { id: 'estabelecimento_empresa', name: 'Estabelecimento/Empresa', isCore: true, comment: 'Nome do estabelecimento ou empresa.', group: 'Padrão', isPersistent: true },
+  { id: 'orgao_filial', name: 'Órgão/Filial', isCore: true, comment: 'Nome do órgão ou filial.', group: 'Padrão', isPersistent: true },
+  { id: 'verba_rubrica', name: 'Verba/Rubrica', isCore: true, comment: 'Código da verba ou rubrica.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'prazo_total', name: 'Prazo Total', isCore: true, comment: 'Prazo total de um contrato/empréstimo em meses (Inteiro).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'parcelas_restantes', name: 'Parcelas Restantes', isCore: true, comment: 'Número de parcelas restantes de um contrato/empréstimo (Inteiro).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'valor_parcela', name: 'Valor da Parcela', isCore: true, comment: 'Valor de cada parcela (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'valor_financiado', name: 'Valor Financiado', isCore: true, comment: 'Valor total financiado (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'cet_mensal', name: 'CET Mensal', isCore: true, comment: 'Custo Efetivo Total Mensal (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'cet_anual', name: 'CET Anual', isCore: true, comment: 'Custo Efetivo Total Anual (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'numero_contrato', name: 'Número do Contrato', isCore: true, comment: 'Número identificador do contrato.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'verba_rubrica_ferias', name: 'Verba/Rubrica Férias', isCore: true, comment: 'Código da verba/rubrica de férias.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'valor_previsto', name: 'Valor Previsto', isCore: true, comment: 'Valor previsto de um lançamento (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'valor_realizado', name: 'Valor Realizado', isCore: true, comment: 'Valor realizado de um lançamento (Numérico).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'observacao', name: 'Observação', isCore: true, comment: 'Observações gerais.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'situacao_parcela', name: 'Situação Parcela', isCore: true, comment: 'Situação de uma parcela (ex: Paga, Aberta, Vencida).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'periodo', name: 'Período', isCore: true, comment: 'Período de referência (Data).', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'identificador', name: 'Identificador', isCore: true, comment: 'Identificador único genérico.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'indice', name: 'Índice', isCore: true, comment: 'Valor de índice ou fator.', group: 'Histórico/Retorno', isPersistent: true },
+  { id: 'tempo_casa', name: 'Tempo de Casa', isCore: true, comment: 'Tempo de serviço na empresa/órgão.', group: 'Margem', isPersistent: true },
+  { id: 'situacao', name: 'Situação', isCore: true, comment: 'Situação funcional (ex: Ativo, Inativo). Esta será substituída por Situação do Usuário.', group: 'Margem', isPersistent: true }, // Kept for backward compatibility during transition, can be removed later
+].map(f => ({ ...f, isPersistent: true })); // Ensure all core fields are marked as persistent
 
-const CORE_PREDEFINED_FIELDS: PredefinedField[] = [
-  { id: 'matricula', name: 'Matrícula', isCore: true, comment: 'Número de matrícula do servidor/funcionário.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'cpf', name: 'CPF', isCore: true, comment: 'Cadastro de Pessoa Física. Será formatado sem máscara na saída se a opção estiver marcada.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'rg', name: 'RG', isCore: true, comment: 'Registro Geral (Identidade). Pode conter letras e números.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'nome', name: 'Nome', isCore: true, comment: 'Nome completo.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'email', name: 'E-mail', isCore: true, comment: 'Endereço de e-mail.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'cnpj', name: 'CNPJ', isCore: true, comment: 'Cadastro Nacional da Pessoa Jurídica. Será formatado sem máscara na saída se a opção estiver marcada.', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'regime', name: 'Regime', isCore: true, comment: 'Regime de contratação (ex: CLT, Estatutário).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'situacao', name: 'Situação', isCore: true, comment: 'Situação funcional (ex: Ativo, Inativo).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'categoria', name: 'Categoria', isCore: true, comment: 'Categoria funcional.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'secretaria', name: 'Secretaria', isCore: true, comment: 'Secretaria ou órgão de lotação.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'setor', name: 'Setor', isCore: true, comment: 'Setor ou departamento específico.', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'margem_bruta', name: 'Margem Bruta', isCore: true, comment: 'Valor da margem bruta consignável (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'margem_reservada', name: 'Margem Reservada', isCore: true, comment: 'Valor da margem reservada (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'margem_liquida', name: 'Margem Líquida', isCore: true, comment: 'Valor da margem líquida disponível (Numérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'parcelas_pagas', name: 'Parcelas Pagas', isCore: true, comment: 'Número de parcelas pagas de um contrato/empréstimo (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  // New fields for v1.2.0
-  { id: 'data_nascimento', name: 'Data de Nascimento', isCore: true, comment: 'Data de nascimento (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'data_admissao', name: 'Data de Admissão', isCore: true, comment: 'Data de admissão (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'data_fim_contrato', name: 'Data Fim do Contrato', isCore: true, comment: 'Data de término do contrato (Data).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'sinal_margem', name: 'Sinal da Margem', isCore: true, comment: 'Sinal indicador da margem (+ ou -) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'estabelecimento_empresa', name: 'Estabelecimento/Empresa', isCore: true, comment: 'Nome do estabelecimento ou empresa (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'orgao_filial', name: 'Órgão/Filial', isCore: true, comment: 'Nome do órgão ou filial (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.PADRAO },
-  { id: 'verba_rubrica', name: 'Verba/Rubrica', isCore: true, comment: 'Código ou descrição da verba/rubrica (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'prazo_total', name: 'Prazo Total', isCore: true, comment: 'Prazo total do contrato em meses/parcelas (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'parcelas_restantes', name: 'Parcelas Restantes', isCore: true, comment: 'Número de parcelas restantes de um contrato/empréstimo (Inteiro).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'valor_parcela', name: 'Valor da Parcela', isCore: true, comment: 'Valor da parcela do contrato/empréstimo (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'valor_financiado', name: 'Valor Financiado', isCore: true, comment: 'Valor total financiado (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'cet_mensal', name: 'CET Mensal', isCore: true, comment: 'Custo Efetivo Total mensal (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'cet_anual', name: 'CET Anual', isCore: true, comment: 'Custo Efetivo Total anual (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'numero_contrato', name: 'Número do Contrato', isCore: true, comment: 'Número identificador do contrato (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'verba_rubrica_ferias', name: 'Verba/Rubrica Férias', isCore: true, comment: 'Código ou descrição da verba/rubrica de férias (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'valor_previsto', name: 'Valor Previsto', isCore: true, comment: 'Valor previsto para uma determinada transação/evento (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'valor_realizado', name: 'Valor Realizado', isCore: true, comment: 'Valor efetivamente realizado (Numérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'observacao', name: 'Observação', isCore: true, comment: 'Campo para observações gerais (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'situacao_parcela', name: 'Situação Parcela', isCore: true, comment: 'Situação de uma parcela (ex: Paga, Aberta, Vencida) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'periodo', name: 'Período', isCore: true, comment: 'Período de referência (Data).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'identificador', name: 'Identificador', isCore: true, comment: 'Identificador único (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'indice', name: 'Índice', isCore: true, comment: 'Índice aplicado (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO },
-  { id: 'situacao_usuario', name: 'Situação do usuário', isCore: true, comment: 'Situação cadastral do usuário (ex: Ativo, Bloqueado) (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-  { id: 'tempo_casa', name: 'Tempo de casa', isCore: true, comment: 'Tempo de serviço na empresa (Alfanumérico).', group: PREDEFINED_FIELD_GROUPS.MARGEM },
-].map(f => ({ ...f, isPersistent: true })).sort((a, b) => a.name.localeCompare(b.name));
+const CORE_PREDEFINED_FIELDS = CORE_PREDEFINED_FIELDS_UNSORTED.sort((a, b) => a.name.localeCompare(b.name));
 
 
 const DATA_TYPES: DataType[] = ['Inteiro', 'Alfanumérico', 'Numérico', 'Data', 'CPF', 'CNPJ'];
@@ -201,8 +195,8 @@ const OUTPUT_ENCODINGS: OutputEncoding[] = ['UTF-8', 'ISO-8859-1', 'Windows-1252
 const DATE_FORMATS: DateFormat[] = ['YYYYMMDD', 'DDMMYYYY'];
 
 const NONE_VALUE_PLACEHOLDER = "__NONE__";
-const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields-v1.2'; // Updated storage key for version
-const SAVED_CONFIGS_STORAGE_KEY = 'sca-saved-configs-v1.2'; // Storage key for saved configurations
+const PREDEFINED_FIELDS_STORAGE_KEY = 'sca-predefined-fields-v1.2'; // Updated storage key for v1.2
+const SAVED_CONFIGS_STORAGE_KEY = 'sca-saved-configs-v1.2'; // Storage key for saved configurations for v1.2
 
 
 // Helper to check if a data type is numeric-like
@@ -351,7 +345,7 @@ export default function Home() {
                         isCore: false,
                         comment: f.comment || '',
                         isPersistent: true, // Fields from storage are persistent
-                        group: f.group || PREDEFINED_FIELD_GROUPS.CUSTOM, // Assign to custom group if not specified
+                        group: f.group || 'Personalizado' // Assign a default group if not present
                     }));
            } catch (e) {
                console.error("Falha ao analisar campos pré-definidos do localStorage:", e);
@@ -365,8 +359,7 @@ export default function Home() {
                combined.push(cf);
            }
        });
-       setPredefinedFields(combined.sort((a, b) => a.name.localeCompare(b.name)));
-
+       setPredefinedFields(combined.sort((a, b) => a.name.localeCompare(b.name))); // Sort all fields
 
         // Load Saved Configurations
         const storedConfigsJson = localStorage.getItem(SAVED_CONFIGS_STORAGE_KEY);
@@ -488,38 +481,37 @@ export default function Home() {
           'email': ['email', 'e-mail', 'correio eletronico', 'contato'],
           'cnpj': ['cnpj', 'cadastro nacional pessoa juridica'],
           'regime': ['regime', 'tipo regime'],
-          'situacao': ['situacao', 'status'],
+          'situacao_usuario': ['situacao', 'status', 'situacao usuario', 'situacao do usuario'],
           'categoria': ['categoria'],
-          'secretaria': ['secretaria', 'orgao', 'unidade', 'orgao pagador'],
+          'secretaria': ['secretaria', 'orgao', 'unidade'], // Removed 'orgao pagador' to be more specific to 'Secretaria'
           'setor': ['setor', 'departamento', 'lotacao'],
           'margem_bruta': ['margem bruta', 'valor bruto', 'bruto', 'salario bruto'],
           'margem_reservada': ['margem reservada', 'reservada', 'valor reservado'],
           'margem_liquida': ['margem liquida', 'liquido', 'valor liquido', 'disponivel', 'margem disponivel'],
-          'parcelas_pagas': ['parcelas pagas', 'parc pagas', 'qtd parcelas pagas', 'parc', 'num parc pagas'],
+          'parcelas_pagas': ['parcelas pagas', 'parc pagas', 'qtd parcelas pagas', 'parc'],
           'data_nascimento': ['data nascimento', 'dt nasc', 'nascimento'],
           'data_admissao': ['data admissao', 'dt adm', 'admissao'],
           'data_fim_contrato': ['data fim contrato', 'dt fim', 'termino contrato'],
           'sinal_margem': ['sinal margem', 'sinal'],
-          'estabelecimento_empresa': ['estabelecimento', 'empresa', 'razao social'],
-          'orgao_filial': ['orgao', 'filial', 'unid adm'],
-          'verba_rubrica': ['verba', 'rubrica', 'cod verba', 'cod rubrica', 'evento'],
-          'prazo_total': ['prazo total', 'total parcelas', 'num parcelas', 'qtd parcelas'],
+          'estabelecimento_empresa': ['estabelecimento', 'empresa', 'razao social', 'nome fantasia'],
+          'orgao_filial': ['orgao filial', 'filial', 'unidade filial', 'orgao pagador'], // Added 'orgao pagador' here
+          'verba_rubrica': ['verba', 'rubrica', 'cod verba', 'cod rubrica'],
+          'prazo_total': ['prazo total', 'total parcelas', 'num parcelas'],
           'parcelas_restantes': ['parcelas restantes', 'parc restantes', 'saldo parcelas'],
-          'valor_parcela': ['valor parcela', 'vlr parc', 'prestacao'],
-          'valor_financiado': ['valor financiado', 'vlr financ', 'principal'],
-          'cet_mensal': ['cet mensal', 'taxa mes', 'juros mes'],
-          'cet_anual': ['cet anual', 'taxa ano', 'juros ano'],
-          'numero_contrato': ['numero contrato', 'nr contrato', 'contrato', 'operacao'],
-          'verba_rubrica_ferias': ['verba ferias', 'rubrica ferias'],
-          'valor_previsto': ['valor previsto', 'vlr prev', 'orcado'],
-          'valor_realizado': ['valor realizado', 'vlr real', 'efetivo'],
-          'observacao': ['observacao', 'obs', 'detalhes', 'complemento'],
-          'situacao_parcela': ['situacao parcela', 'status parc'],
-          'periodo': ['periodo', 'competencia', 'mes ref', 'data ref'],
+          'valor_parcela': ['valor parcela', 'vlr parcela', 'prestacao'],
+          'valor_financiado': ['valor financiado', 'vlr financiado', 'montante'],
+          'cet_mensal': ['cet mensal', 'taxa mes'],
+          'cet_anual': ['cet anual', 'taxa ano'],
+          'numero_contrato': ['numero contrato', 'contrato', 'num contrato', 'nro contrato'],
+          'verba_rubrica_ferias': ['verba ferias', 'rubrica ferias', 'cod verba ferias'],
+          'valor_previsto': ['valor previsto', 'vlr prev'],
+          'valor_realizado': ['valor realizado', 'vlr real'],
+          'observacao': ['observacao', 'obs', 'detalhes'],
+          'situacao_parcela': ['situacao parcela', 'status parcela'],
+          'periodo': ['periodo', 'competencia', 'mes ref'],
           'identificador': ['identificador', 'id', 'codigo', 'chave'],
-          'indice': ['indice', 'fator', 'indexador'],
-          'situacao_usuario': ['situacao usuario', 'status usuario', 'estado usuario'],
-          'tempo_casa': ['tempo de casa', 'antiguidade'],
+          'indice': ['indice', 'fator', 'taxa indice'],
+          'tempo_casa': ['tempo de casa', 'tempo casa', 'antiguidade'],
       };
 
       for (const fieldId in guesses) {
@@ -541,11 +533,11 @@ export default function Home() {
       if (lowerHeader.includes('cnpj')) return 'CNPJ';
       if (lowerHeader.includes('cpf')) return 'CPF';
       if (lowerHeader.includes('data') || lowerHeader.includes('date') || lowerHeader.includes('nasc') || lowerHeader.includes('periodo') || lowerHeader.includes('admissao') || lowerHeader.includes('fim contrato')) return 'Data';
-      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad') || lowerHeader.includes('financ') || lowerHeader.includes('cet') || lowerHeader.includes('parcela')) return 'Numérico';
-       if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id') || lowerHeader.includes('prazo') || lowerHeader.includes('parcelas')) return 'Inteiro';
-      if (lowerHeader.includes('rg')) return 'Alfanumérico'; // RG can have letters
-       if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // Typically numeric but might be integer
-       if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao') || lowerHeader.includes('cargo') || lowerHeader.includes('funcao') || lowerHeader.includes('sinal') || lowerHeader.includes('estab') || lowerHeader.includes('empresa') || lowerHeader.includes('filial') || lowerHeader.includes('verba') || lowerHeader.includes('rubrica') || lowerHeader.includes('contrato') || lowerHeader.includes('identificador') || lowerHeader.includes('indice') || lowerHeader.includes('tempo')) return 'Alfanumérico';
+      if (lowerHeader.includes('margem') || lowerHeader.includes('valor') || lowerHeader.includes('salario') || lowerHeader.includes('saldo') || lowerHeader.includes('preco') || lowerHeader.includes('brut') || lowerHeader.includes('liquid') || lowerHeader.includes('reservad') || lowerHeader.includes('parcela') || lowerHeader.includes('financiado') || lowerHeader.includes('cet') || lowerHeader.includes('previsto') || lowerHeader.includes('realizado') ) return 'Numérico'; // valor_parcela, valor_financiado, cet, valor_previsto, valor_realizado
+      if (lowerHeader.includes('matricula') || lowerHeader.includes('mat') || lowerHeader.includes('cod') || lowerHeader.includes('numero') || lowerHeader.includes('num') || lowerHeader.includes('id') || lowerHeader.includes('prazo') || lowerHeader.includes('restante') ) return 'Inteiro'; // prazo_total, parcelas_restantes
+      if (lowerHeader.includes('rg') || lowerHeader.includes('sinal') || lowerHeader.includes('contrato') || lowerHeader.includes('identificador') || lowerHeader.includes('indice') || lowerHeader.includes('tempo casa')) return 'Alfanumérico'; // sinal_margem, numero_contrato, identificador, indice, tempo_casa
+      if (lowerHeader.includes('idade') || lowerHeader.includes('quant')) return 'Numérico'; // fallback for general numeric terms
+      if (lowerHeader.includes('nome') || lowerHeader.includes('descri') || lowerHeader.includes('obs') || lowerHeader.includes('secretaria') || lowerHeader.includes('setor') || lowerHeader.includes('regime') || lowerHeader.includes('situacao') || lowerHeader.includes('categoria') || lowerHeader.includes('email') || lowerHeader.includes('orgao') || lowerHeader.includes('cargo') || lowerHeader.includes('funcao') || lowerHeader.includes('empresa') || lowerHeader.includes('filial') || lowerHeader.includes('verba') || lowerHeader.includes('rubrica')) return 'Alfanumérico'; // estabelecimento_empresa, orgao_filial, verba_rubrica, verba_rubrica_ferias, observacao, situacao_parcela
 
       // Guess based on sample data content if header wasn't decisive
        if (stringSample) {
@@ -558,9 +550,9 @@ export default function Home() {
         }
 
        if (/[a-zA-Z]/.test(lowerHeader) || (stringSample && /[a-zA-Z]/.test(stringSample))) return 'Alfanumérico';
-       if (/^\d+$/.test(lowerHeader)) return 'Inteiro';
+       if (/^\d+$/.test(lowerHeader)) return 'Inteiro'; // If header itself is just a number
 
-      return 'Alfanumérico';
+      return 'Alfanumérico'; // Default fallback
   }, []);
 
 
@@ -895,7 +887,7 @@ export default function Home() {
                   name: trimmedName,
                   comment: comment || '',
                   isPersistent: isPersistent, // Update persistence based on checkbox
-                  group: originalField.group || PREDEFINED_FIELD_GROUPS.CUSTOM, // Retain original group or assign to custom
+                  group: originalField.isCore ? originalField.group : (isPersistent ? 'Principal Personalizado' : 'Opcional Personalizado') // Keep original group for core, or set based on persistence for custom
                };
 
               updatedFields = predefinedFields.map(f =>
@@ -910,13 +902,13 @@ export default function Home() {
                   comment: comment || '',
                   isCore: false, // New fields are never core
                   isPersistent: isPersistent, // Set persistence based on checkbox
-                  group: PREDEFINED_FIELD_GROUPS.CUSTOM, // New custom fields go to custom group
+                  group: isPersistent ? 'Principal Personalizado' : 'Opcional Personalizado'
               };
               updatedFields = [...predefinedFields, fieldToUpdateOrAdd];
               fieldDescription += ` adicionado com ID "${newId}" (${isPersistent ? 'Principal' : 'Opcional'}).`;
           }
 
-        setPredefinedFields(updatedFields.sort((a, b) => a.name.localeCompare(b.name)));
+        setPredefinedFields(updatedFields.sort((a,b) => a.name.localeCompare(b.name)));
         saveCustomPredefinedFields(updatedFields); // Save all potentially updated fields (including changes in persistence)
         setPredefinedFieldDialogState({ isOpen: false, isEditing: false, fieldName: '', isPersistent: false, comment: '' });
         toast({ title: "Sucesso", description: fieldDescription });
@@ -934,8 +926,7 @@ export default function Home() {
     // }
 
      const updatedFields = predefinedFields.filter(f => f.id !== idToRemove);
-    setPredefinedFields(updatedFields.sort((a, b) => a.name.localeCompare(b.name)));
-
+    setPredefinedFields(updatedFields.sort((a,b) => a.name.localeCompare(b.name)));
 
     // Update mappings that used this field
     setColumnMappings(prev => prev.map(m => m.mappedField === idToRemove ? { ...m, mappedField: null } : m));
@@ -1807,7 +1798,7 @@ export default function Home() {
              originalValue = value;
              // Try to guess data type for padding purposes if TXT
               if (outputConfig.format === 'txt') {
-                 dataType = /^-?\d+$/.test(value) ? 'Inteiro' : /^-?\d+(\.|,)\d+$/.test(value) ? 'Numérico' : 'Alfanumérico';
+                 dataType = /^-?\d+$/.test(value) ? 'Inteiro' : /^-?\d+(\.|,)\d+$/.test(value.replace(',', '.')) ? 'Numérico' : 'Alfanumérico';
              }
           } else if (outputField.isCalculated) {
              value = calculateFieldValue(outputField, row);
@@ -1902,7 +1893,8 @@ export default function Home() {
                                 let parsedDate: Date | null = null;
                                 let cleanedValue = value;
 
-                                // Apply removeMask if checked OR if it wasn't checked but we need to clean it anyway for parsing
+                                // Apply removeMask based on mapping setting
+                                // Apply removeMask based on mapping setting
                                 // Let's prioritize the removeMask setting, but also clean common separators if not checked.
                                 if (mapping?.removeMask && value) {
                                     cleanedValue = value.replace(/[^\d]/g, '');
@@ -1910,7 +1902,6 @@ export default function Home() {
                                      // Basic cleaning if mask removal is off, helps parsing
                                      cleanedValue = value.replace(/[-/.]/g, '');
                                 }
-
 
                                 const dateStringForParsing = String(originalValue).trim(); // Use original for robust parsing
                                 const outputDateFormat = outputField.dateFormat || 'YYYYMMDD'; // Required format
@@ -1962,7 +1953,6 @@ export default function Home() {
                                           }
                                      }
                                 }
-
 
                                 if (parsedDate && isValid(parsedDate)) {
                                      const y = parsedDate.getFullYear();
@@ -2229,29 +2219,60 @@ export default function Home() {
         toast({ title: "Sucesso", description: `Configuração "${configNameToDelete}" excluída.` });
     };
 
-    // Memoized and grouped list of predefined fields for dropdowns
-    const groupedPredefinedFields = useMemo(() => {
-        const groups: Record<string, PredefinedField[]> = {};
-        const sortedFields = [...predefinedFields].sort((a,b) => a.name.localeCompare(b.name));
+  // Memoized list of predefined fields available for mapping dropdowns
+  const memoizedPredefinedFields = useMemo(() => {
+      // Sort primarily by group, then by name within each group
+      const groupedFields = predefinedFields.reduce((acc, field) => {
+          const group = field.group || 'Personalizado'; // Default group if none
+          if (!acc[group]) {
+              acc[group] = [];
+          }
+          acc[group].push(field);
+          return acc;
+      }, {} as Record<string, PredefinedField[]>);
 
-        sortedFields.forEach(field => {
-            const groupName = field.group || PREDEFINED_FIELD_GROUPS.CUSTOM;
-            if (!groups[groupName]) {
-                groups[groupName] = [];
-            }
-            groups[groupName].push(field);
-        });
-        return Object.entries(groups)
-            .sort(([groupA], [groupB]) => { // Optional: Sort groups themselves if needed
-                 const order = [PREDEFINED_FIELD_GROUPS.PADRAO, PREDEFINED_FIELD_GROUPS.MARGEM, PREDEFINED_FIELD_GROUPS.HISTORICO_RETORNO, PREDEFINED_FIELD_GROUPS.CUSTOM];
-                 return order.indexOf(groupA) - order.indexOf(groupB);
-            });
-    }, [predefinedFields]);
+      // Sort fields within each group
+      for (const group in groupedFields) {
+          groupedFields[group].sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      // Define the desired order of groups
+      const groupOrder = ['Padrão', 'Margem', 'Histórico/Retorno', 'Principal Personalizado', 'Opcional Personalizado', 'Personalizado'];
+      const sortedGroups: { groupName: string, fields: PredefinedField[] }[] = [];
+
+      groupOrder.forEach(groupName => {
+          if (groupedFields[groupName]) {
+              sortedGroups.push({ groupName, fields: groupedFields[groupName] });
+              delete groupedFields[groupName]; // Remove from original to handle remaining groups
+          }
+      });
+
+      // Add any remaining groups (should ideally not happen if all are covered)
+      Object.keys(groupedFields).sort().forEach(groupName => {
+          sortedGroups.push({ groupName, fields: groupedFields[groupName] });
+      });
+
+
+      return sortedGroups;
+  }, [predefinedFields]);
 
 
  // Render helper for Output Field selection for MAPPED fields
  const renderMappedOutputFieldSelect = (currentField: OutputFieldConfig & { isStatic: false, isCalculated: false }) => {
      const currentFieldMappedId = currentField.mappedField;
+
+     // Flatten available options while ensuring they are mapped in step 2 and not used in OTHER output slots
+     const availableOptions = memoizedPredefinedFields.flatMap(group =>
+        group.fields
+            .filter(pf =>
+                columnMappings.some(cm => cm.mappedField === pf.id)
+            )
+            .filter(pf =>
+                 pf.id === currentFieldMappedId ||
+                 !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id)
+             )
+     );
+
 
      return (
          <Select
@@ -2264,25 +2285,27 @@ export default function Home() {
              </SelectTrigger>
              <SelectContent>
                  <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>-- Selecione --</SelectItem>
-                 {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
-                    <SelectGroup key={groupName}>
-                        <SelectLabel>{groupName}</SelectLabel>
-                        {fieldsInGroup
-                            .filter(pf => columnMappings.some(cm => cm.mappedField === pf.id)) // Only show fields actually mapped
-                            .filter(pf => pf.id === currentFieldMappedId || !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id)) // Allow current or unused
-                            .map(field => (
-                            <SelectItem key={field.id} value={field.id}>
-                                {field.name}
-                            </SelectItem>
-                        ))}
-                    </SelectGroup>
-                 ))}
-                  {/* Check if there are any available options at all */}
-                 {!groupedPredefinedFields.flatMap(([,fields]) => fields)
-                    .filter(pf => columnMappings.some(cm => cm.mappedField === pf.id))
-                    .some(pf => pf.id === currentFieldMappedId || !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === pf.id))
-                    && <SelectItem value="no-options" disabled>Nenhum campo mapeado disponível</SelectItem>
-                 }
+                 {availableOptions.length > 0 ? (
+                     memoizedPredefinedFields.map(group => (
+                         <SelectGroup key={group.groupName}>
+                             <SelectLabel>{group.groupName}</SelectLabel>
+                             {group.fields
+                                 .filter(field =>
+                                      field.id === currentFieldMappedId || // Allow selecting the current field
+                                      !outputConfig.fields.some(of => !of.isStatic && !of.isCalculated && of.mappedField === field.id) // Filter out fields already used in OTHER output slots
+                                  )
+                                 .filter(field => columnMappings.some(cm => cm.mappedField === field.id)) // Ensure field is actually mapped in step 2
+                                 .map(field => (
+                                     <SelectItem key={field.id} value={field.id}>
+                                         {field.name}
+                                     </SelectItem>
+                                 ))
+                             }
+                         </SelectGroup>
+                     ))
+                 ) : (
+                      <SelectItem value={NONE_VALUE_PLACEHOLDER} disabled>Nenhum campo mapeado disponível</SelectItem>
+                 )}
              </SelectContent>
          </Select>
      );
@@ -2470,16 +2493,16 @@ export default function Home() {
                                                      <SelectValue placeholder="Selecione ou deixe em branco" />
                                                    </SelectTrigger>
                                                    <SelectContent>
-                                                        <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
-                                                        {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
-                                                            <SelectGroup key={groupName}>
-                                                                <SelectLabel>{groupName}</SelectLabel>
-                                                                {fieldsInGroup.map(field => (
-                                                                    <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
-                                                                ))}
-                                                            </SelectGroup>
-                                                        ))}
-                                                    </SelectContent>
+                                                     <SelectItem value={NONE_VALUE_PLACEHOLDER}>-- Sem mapeamento --</SelectItem>
+                                                      {memoizedPredefinedFields.map(group => (
+                                                          <SelectGroup key={group.groupName}>
+                                                              <SelectLabel>{group.groupName}</SelectLabel>
+                                                              {group.fields.map(field => (
+                                                                  <SelectItem key={field.id} value={field.id}>{field.name}</SelectItem>
+                                                              ))}
+                                                          </SelectGroup>
+                                                      ))}
+                                                   </SelectContent>
                                                  </Select>
                                                  {mappedFieldDetails?.comment && (
                                                       <TooltipProvider>
@@ -2545,7 +2568,9 @@ export default function Home() {
                      <CardHeader>
                          <CardTitle className="text-xl">Gerenciar Campos Pré-definidos</CardTitle>
                          <CardDescription>
-                           Adicione, edite ou remova campos para o mapeamento. Campos Principais são fixos; campos adicionais são temporários e descartados ao atualizar a página.
+                             Adicione, edite ou remova campos para o mapeamento. Campos Principais são fixos.
+                             Campos personalizados adicionados aqui são mantidos temporariamente para esta sessão;
+                             ao atualizar a página, eles podem ser descartados se não forem marcados como Principais.
                          </CardDescription>
                      </CardHeader>
                       <CardContent>
@@ -2555,10 +2580,10 @@ export default function Home() {
                              </Button>
                          </div>
                          <div className="space-y-2 max-h-40 overflow-y-auto border rounded p-2 bg-secondary/30">
-                              {groupedPredefinedFields.map(([groupName, fieldsInGroup]) => (
-                                <div key={groupName} className="mb-2">
-                                  <h3 className="text-sm font-semibold text-muted-foreground mb-1 sticky top-0 bg-secondary/50 p-1 rounded -mx-1">{groupName}</h3>
-                                  {fieldsInGroup.map(field => (
+                              {memoizedPredefinedFields.map(group => (
+                                <React.Fragment key={group.groupName}>
+                                  <h4 className="text-sm font-semibold text-muted-foreground px-2 pt-2">{group.groupName}</h4>
+                                  {group.fields.map(field => (
                                      <div key={field.id} className="flex items-center justify-between p-2 border-b last:border-b-0 gap-2">
                                          <div className="flex items-center gap-1 flex-wrap flex-grow">
                                              <span className="text-sm font-medium">{field.name}</span>
@@ -2620,10 +2645,10 @@ export default function Home() {
                                                 </TooltipProvider>
                                            </div>
                                      </div>
-                                 ))}
-                                </div>
-                             ))}
-                             {groupedPredefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo pré-definido encontrado.</p>}
+                                  ))}
+                                </React.Fragment>
+                              ))}
+                             {predefinedFields.length === 0 && <p className="text-sm text-muted-foreground text-center p-2">Nenhum campo pré-definido encontrado.</p>}
                          </div>
                       </CardContent>
                        <CardFooter className="flex justify-end">
@@ -3434,22 +3459,100 @@ export default function Home() {
                                           <SelectItem key={config.name} value={config.name!}>
                                              <div className="flex justify-between items-center w-full">
                                                   <span>{config.name}</span>
-                                                  <Button
-                                                      variant="ghost"
-                                                      size="icon"
-                                                      className="h-5 w-5 ml-2 text-destructive hover:bg-destructive/10 shrink-0"
-                                                      onPointerDown={(e) => e.stopPropagation()} // Prevent select close on button click
-                                                      onClick={(e) => { e.stopPropagation(); deleteConfig(config.name!); }}
-                                                      aria-label={`Excluir modelo ${config.name}`}
-                                                  >
-                                                      <Trash2 className="h-3 w-3"/>
-                                                  </Button>
+                                                  <Popover>
+                                                      <PopoverTrigger asChild onClick={(e) => e.stopPropagation()}>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-5 w-5 ml-2 text-muted-foreground hover:text-accent shrink-0"
+                                                                aria-label={`Opções para ${config.name}`}
+                                                                onPointerDown={(e) => e.stopPropagation()} // Prevent select close on button click
+                                                            >
+                                                                <Settings className="h-3 w-3"/>
+                                                            </Button>
+                                                      </PopoverTrigger>
+                                                      <PopoverContent className="w-auto p-1" onClick={(e) => e.stopPropagation()}>
+                                                          <Button
+                                                              variant="ghost"
+                                                              size="sm"
+                                                              className="w-full justify-start text-xs h-7"
+                                                              onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  const jsonString = JSON.stringify(config, null, 2);
+                                                                  const blob = new Blob([jsonString], { type: "application/json" });
+                                                                  const url = URL.createObjectURL(blob);
+                                                                  const a = document.createElement("a");
+                                                                  a.href = url;
+                                                                  a.download = `${config.name?.replace(/\s+/g, '_') || 'modelo'}_sca.json`;
+                                                                  document.body.appendChild(a);
+                                                                  a.click();
+                                                                  document.body.removeChild(a);
+                                                                  URL.revokeObjectURL(url);
+                                                                  toast({ title: "Modelo Baixado", description: `O modelo "${config.name}" foi baixado.`});
+                                                              }}
+                                                          >
+                                                              <Download className="mr-2 h-3 w-3" /> Baixar JSON
+                                                          </Button>
+                                                           <Button
+                                                              variant="ghost"
+                                                              size="sm"
+                                                              className="w-full justify-start text-xs text-destructive hover:text-destructive h-7"
+                                                              onClick={(e) => { e.stopPropagation(); deleteConfig(config.name!); }}
+                                                          >
+                                                              <Trash2 className="mr-2 h-3 w-3" /> Excluir
+                                                          </Button>
+                                                      </PopoverContent>
+                                                  </Popover>
                                               </div>
                                          </SelectItem>
                                      ))}
                                      {savedConfigs.length === 0 && <SelectItem value="no-configs" disabled>Nenhum modelo salvo.</SelectItem>}
                                  </SelectContent>
                              </Select>
+                              <div className="mt-2">
+                                <Label htmlFor="config-upload-json" className="text-xs text-muted-foreground">Ou carregue um modelo .json:</Label>
+                                <Input
+                                  id="config-upload-json"
+                                  type="file"
+                                  accept=".json"
+                                  className="mt-1 text-xs h-9"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      const reader = new FileReader();
+                                      reader.onload = (event) => {
+                                        try {
+                                          const loadedConfig = JSON.parse(event.target?.result as string) as OutputConfig;
+                                          // Validate loadedConfig structure
+                                          if (loadedConfig.name && Array.isArray(loadedConfig.fields)) {
+                                            setOutputConfig(loadedConfig);
+                                            setSavedConfigs(prev => {
+                                                const existing = prev.find(c => c.name === loadedConfig.name);
+                                                let updated;
+                                                if (existing) {
+                                                    updated = prev.map(c => c.name === loadedConfig.name ? loadedConfig : c);
+                                                } else {
+                                                    updated = [...prev, loadedConfig];
+                                                }
+                                                saveAllConfigs(updated);
+                                                return updated;
+                                            });
+                                            setConfigManagementDialogState({ isOpen: false, action: null, configName: '', selectedConfigToLoad: null });
+                                            toast({ title: "Sucesso", description: `Modelo "${loadedConfig.name}" carregado do arquivo.` });
+                                          } else {
+                                            toast({ title: "Erro", description: "Arquivo JSON inválido ou não corresponde ao formato esperado.", variant: "destructive" });
+                                          }
+                                        } catch (error) {
+                                          toast({ title: "Erro ao ler JSON", description: "Não foi possível processar o arquivo JSON.", variant: "destructive" });
+                                          console.error("Error parsing JSON config:", error);
+                                        }
+                                      };
+                                      reader.readAsText(file);
+                                      e.target.value = ''; // Reset file input
+                                    }
+                                  }}
+                                />
+                              </div>
                          </div>
                      )}
                      <p className="text-xs text-muted-foreground">* Campo obrigatório.</p>

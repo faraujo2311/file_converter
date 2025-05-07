@@ -6,7 +6,7 @@ import { Toaster } from "@/components/ui/toaster" // Import Toaster
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' }); // Use Inter
 
 export const metadata: Metadata = {
-  title: 'SCA - Sistema para conversão de arquivos v1.2.0', // Updated App Name and version
+  title: 'SCA - Sistema para conversão de arquivos v1.1.0', // Updated App Name and version
   description: 'Converta arquivos Excel ou PDF(em teste) para layouts TXT ou CSV personalizados. Seus dados não são armazenados, garantindo conformidade com a LGPD.', // Updated description with LGPD note
 };
 

@@ -108,32 +108,38 @@ const extractPdfTableFlow = ai.defineFlow<
     try {
         // Pass the input directly to the prompt function
         const response = await prompt(input);
-        const output = response?.output; // Access output from the response object
+        
+        // Ensure response and response.output are not null/undefined
+        if (!response || !response.output) {
+          console.error('AI model returned null or undefined response/output.');
+          return { headers: [], rows: [], error: 'AI model returned no or invalid output.' };
+        }
+        
+        const output = response.output;
 
-        console.log('AI model raw response:', response); // Log the full response for debugging
+        console.log('AI model raw response:', response); 
         console.log('AI model extracted output:', output);
 
-         if (!output) {
-           console.error('AI model returned undefined output.');
-           return { headers: [], rows: [], error: 'AI model returned no output.' };
+         // More robust validation
+         if (typeof output.error === 'string' && output.error.length > 0) {
+            console.warn('AI model reported an error during extraction:', output.error);
+            // If an error is reported by the AI, prefer returning that error message
+            // and ensure headers/rows are empty as per prompt instructions.
+            return { headers: [], rows: [], error: output.error };
          }
-
-         // Basic validation: Check if headers and rows exist and are arrays
+         
          if (!Array.isArray(output.headers) || !Array.isArray(output.rows)) {
             console.warn('AI model output missing headers/rows arrays or incorrect type:', output);
-             // Try to provide a more specific error based on what's missing
-             let errorMsg = output.error || 'AI model returned incomplete data.';
-             if (!Array.isArray(output.headers)) errorMsg += ' Headers are missing or not an array.';
-             if (!Array.isArray(output.rows)) errorMsg += ' Rows are missing or not an array.';
+            let errorMsg = 'AI model returned incomplete data.';
+            if (!Array.isArray(output.headers)) errorMsg += ' Headers are missing or not an array.';
+            if (!Array.isArray(output.rows)) errorMsg += ' Rows are missing or not an array.';
             return { headers: [], rows: [], error: errorMsg.trim() };
          }
-
-         // Optional: Add more specific validation (e.g., check row structure consistency) if needed
-
+        
         return output;
+
     } catch(e: any) {
         console.error("Error during AI PDF extraction flow execution:", e);
-         // Try to capture more specific error details if available
          let errorMessage = `AI processing error: ${e.message || 'Unknown error'}`;
          if (e.cause) {
            errorMessage += ` Cause: ${e.cause}`;
